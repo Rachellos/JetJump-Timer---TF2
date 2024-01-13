@@ -71,6 +71,8 @@ enum struct Records
     int runIndex;
 
     float time;
+
+    bool exists;
 }
 
 enum struct StageEnterTime

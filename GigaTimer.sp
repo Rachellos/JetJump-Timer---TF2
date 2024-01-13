@@ -44,7 +44,6 @@ StageEnterTime g_stageEnterTimes[RECORDS_LIMIT];
 
 Player g_player[MAXPLAYERS+1];
 
-
 #include <GigaTimer\enums.sp>
 #include <GigaTimer\commands.sp>
 
@@ -67,7 +66,7 @@ public APLRes AskPluginLoad2(Handle myself, bool late, char[] error, int err_max
     return APLRes_Success;
 }
 
-public void OnPluginStart()
+public void OnAllPluginsLoaded()
 {
     ConnectDatabase();
 
@@ -82,7 +81,9 @@ public void OnPluginStart()
 
 void OnRoundStart(Event event, const char[] name, bool dontBroadcast)
 {
-    InitMap();
+    for (int i; i < ZONES_LIMIT; i++)
+        if ( g_zones[i].exists )
+            CreateZoneEntity( i ); // Creating touch/leave hook 
 }
 
 void OnPlayerSpawn(Event event, const char[] name, bool dontBroadcast)
@@ -112,7 +113,8 @@ public void OnMapStart()
 
 public void OnMapEnd()
 {
-    return;
+    // cloar our zones firstly
+    ClearZonesData();
 }
 
 public void OnClientPostAdminCheck(int client)
@@ -178,9 +180,6 @@ void InitZones()
 public void Thread_GetMapZones(Database db, DBResultSet results, const char[] error, any data)
 {
     if ( strlen(error) > 1 ) { LogError(error); return; }
-    
-    // cloar our zones firstly
-    ClearZonesData();
 
     int i = 0;
 
@@ -230,7 +229,7 @@ public void Thread_GetMapZones(Database db, DBResultSet results, const char[] er
 
         g_zones[i].exists = true;
 
-        CreateZoneEntity( i );
+        CreateZoneEntity( i ); // Creating touch/leave hook 
 
         i++;
     }
@@ -285,6 +284,8 @@ void Thread_GetMapRecords(Database db, DBResultSet results, const char[] error, 
 
         g_records[i].time = results.FetchFloat(6);
 
+        g_records[i].exists = true;
+
         i++;
     }
 
@@ -327,19 +328,8 @@ void Thread_GetEnterStageTimes(Database db, DBResultSet results, const char[] er
 
     if ( i > 0 )
     {
-        PrintToServer("Loaded %i Records! For %s", i, g_currentMap.name);
-        MC_PrintToChatAll("Loaded {gold}%i {white}records!", i);
-    }
-    else
-    {
-        PrintToServer("No Records Found For %s", g_currentMap.name);
-    }
-
-    if ( results.RowCount )
-    {
-        char query[512];
-        FormatEx(query, sizeof(query), "SELECT record_id, player_id, class, stage_id, time FROM enter_stage_times WHERE map_id = %i", g_currentMap.id );
-        g_hDatabase.Query(Thread_GetEnterStageTimes, query);
+        PrintToServer("Loaded %i Stage Enter Records! For %s", i, g_currentMap.name);
+        MC_PrintToChatAll("Loaded {gold}%i {white}Stage Enter records!", i);
     }
 }
 
@@ -412,10 +402,10 @@ public void Event_Touch_Zone( int trigger, int client )
                 {
                     char comparisonTimeText[TIME_SIZE_DEF];
                     float bestTime = g_stageEnterTimes[stageEnterWrIndex].time;
-                    int prefix = currentTime > bestTime ? '+' : '-';
+                    int prefix = currentTime >= bestTime ? '+' : '-';
                     
                     FormatSeconds(currentTime > bestTime ? currentTime - bestTime : bestTime - currentTime, comparisonTimeText);
-                    FormatEx(comparisonText, sizeof(comparisonText), "{white}({lightskyblue}WR %c%s{white})", prefix, comparisonTimeText);
+                    FormatEx(comparisonText, sizeof(comparisonText), "{white}({%s}WR %c%s{white})", prefix == '+' ? "lightskyblue" : "red", prefix, comparisonTimeText);
                 }
                 MC_PrintToChat(client, "Entered {blue}%s {white}with time: {green}%s %s", g_zones[id].runInfo.runName, currentTimeText, comparisonText);
 
@@ -554,8 +544,8 @@ void SaveRecord(Player player, Run run)
     // Add/Update record to the database here
     FormatEx(query, sizeof(query), "INSERT INTO records (map_id, player_id, class, run_type, run_id, time, server_id) VALUES(%i, %i, %i, %i, %i, %f, %i) \
                                     ON DUPLICATE KEY UPDATE time = %f, server_id = %i",
-            g_currentMap.id, player.id, player.currentClass, run.type, run.type != RUN_MAP ? run.info.index : 1, run.type == RUN_STAGE ? run.stageFinishTime : run.finishTime, g_server.id,
-            run.type == RUN_STAGE ? run.stageFinishTime : run.finishTime, g_server.id);
+                                    g_currentMap.id, player.id, player.currentClass, run.type, run.type != RUN_MAP ? run.info.index : 1, run.type == RUN_STAGE ? run.stageFinishTime : run.finishTime, g_server.id,
+                                    run.type == RUN_STAGE ? run.stageFinishTime : run.finishTime, g_server.id);
 
     transaction.AddQuery(query);
 
@@ -571,7 +561,8 @@ void SaveRecord(Player player, Run run)
     // that means player just finish stages map correctly
     if ( run.type == RUN_MAP && run.info.index > 1 && run.linearMode )
     {
-        for (int stage_id = 1; stage_id <= run.info.index; stage_id++)
+        // we start by stage 2 obviously
+        for (int stage_id = 2; stage_id <= run.info.index; stage_id++)
         {
             FormatEx(query, sizeof(query), "INSERT INTO enter_stage_times (record_id, map_id, player_id, class, stage_id, time) \
                                             VALUES \
@@ -580,9 +571,9 @@ void SaveRecord(Player player, Run run)
                                                 %i, %i, %i, %i, %f \
                                             ) \
                                             ON DUPLICATE KEY UPDATE time = %f",
-            g_currentMap.id, player.id, player.currentClass, RUN_MAP,
-            g_currentMap.id, player.id, player.currentClass, stage_id, run.stageEnterTime[stage_id],
-            run.stageEnterTime[stage_id]);
+                                            g_currentMap.id, player.id, player.currentClass, RUN_MAP,
+                                            g_currentMap.id, player.id, player.currentClass, stage_id, run.stageEnterTime[stage_id],
+                                            run.stageEnterTime[stage_id]);
             
             transaction.AddQuery(query);
         }
@@ -850,7 +841,7 @@ stock int GetPersonalRecordRunIndex(int client, Class class, RunType runType, in
 {
     for (int i = 0; i < RECORDS_LIMIT; i++)
     {
-        if ( g_records[i].player_id == g_player[client].id && g_records[i].class == class && g_records[i].runType == runType && g_records[i].runIndex == run_id )
+        if ( g_records[i].player_id == g_player[client].id && g_records[i].class == class && g_records[i].runType == runType && g_records[i].runIndex == run_id && g_records[i].exists )
             return i;
     }
 
@@ -864,9 +855,9 @@ stock int GetWorldRecordRunIndex(Class class, RunType runType, int run_id)
 
     for (int i = 0; i < RECORDS_LIMIT; i++)
     {
-        if ( g_records[i].class == class && g_records[i].runType == runType && g_records[i].runIndex == run_id )
+        if ( g_records[i].class == class && g_records[i].runType == runType && g_records[i].runIndex == run_id && g_records[i].exists )
         {
-            if ( bestTime == -1.0 )
+            if ( index == -1 )
             {
                 index = i;
                 bestTime = g_records[i].time;
@@ -884,13 +875,15 @@ stock int GetWorldRecordRunIndex(Class class, RunType runType, int run_id)
 
 stock int GetStageEnterWorldRecordIndex(Class class, int stage_id)
 {
-    int wrIndex = GetWorldRecordRunIndex(class, RUN_STAGE, stage_id);
+    int wrIndex = GetWorldRecordRunIndex(class, RUN_MAP, 1);
 
     if ( wrIndex == -1 )
         return -1;
 
     for (int i = 0; i < RECORDS_LIMIT; i++)
-        if ( g_stageEnterTimes[i].record_id == g_records[wrIndex].record_id )
+        if ( g_stageEnterTimes[i].record_id == g_records[wrIndex].record_id
+            && g_stageEnterTimes[i].stage_id == stage_id
+            && g_stageEnterTimes[i].class == class )
             return i;
 
     return -1;
@@ -898,13 +891,15 @@ stock int GetStageEnterWorldRecordIndex(Class class, int stage_id)
 
 stock int GetStageEnterPersonalRecordIndex(int client, Class class, int stage_id)
 {
-    int prIndex = GetPersonalRecordRunIndex(client, class, RUN_STAGE, stage_id);
+    int prIndex = GetPersonalRecordRunIndex(client, class, RUN_MAP, 1);
 
     if ( prIndex == -1 )
         return -1;
 
     for (int i = 0; i < RECORDS_LIMIT; i++)
-        if ( g_stageEnterTimes[i].record_id == g_records[prIndex].record_id )
+        if ( g_stageEnterTimes[i].record_id == g_records[prIndex].record_id
+            && g_stageEnterTimes[i].stage_id == stage_id
+            && g_stageEnterTimes[i].class == class )
             return i;
 
     return -1;
@@ -1054,20 +1049,28 @@ void RecalculatePoints(RunType runtype, int run_id, Class class)
     g_hDatabase.Execute(transaction, _, Thread_Empty_TransactionFail);
 }
 
-ServerInfo AuthServer()
+void AuthServer()
 {
     ServerInfo srv;
     int iPublicIP[4];
 
     // if we cant get public ip --> stop plugin
-    if (SteamWorks_GetPublicIP(iPublicIP) == false)
+    if (!SteamWorks_IsConnected() || !SteamWorks_GetPublicIP(iPublicIP))
         SetFailState("Appears like we had an error on getting the Public Server IP address.");
+
+    if (iPublicIP[0] == 0)
+    {
+        AuthServer();
+        return;
+    }
 
     Format(srv.ip, sizeof(ServerInfo::ip), "%d.%d.%d.%d", iPublicIP[0], iPublicIP[1], iPublicIP[2], iPublicIP[3]);
     srv.port = GetConVarInt(FindConVar("hostport"));
     srv.maxPlayers = 10;
     GetConVarString(FindConVar("hostname"), srv.name, sizeof(ServerInfo::name));
     srv.isOnline = true;
+
+    g_server = srv;
 
     char query[256];
     FormatEx(query, sizeof(query), "INSERT INTO servers (name, ip, max_players, isOnline) VALUES('%s', '%s:%i', %i, 1) \
@@ -1083,8 +1086,6 @@ ServerInfo AuthServer()
     FormatEx(query, sizeof(query), "SELECT id FROM servers WHERE ip = '%s:%i'", srv.ip, srv.port);
 
     g_hDatabase.Query(Thread_GetServerId, query);
-
-    return srv;
 }
 
 public void Thread_GetServerId(Database db, DBResultSet results, const char[] error, any data)
@@ -1351,7 +1352,7 @@ void BuildDatabaseTables()
 
     t.AddQuery( "CREATE TABLE IF NOT EXISTS enter_stage_times \
                 ( \
-                    record_id INT NOT NULL PRIMARY KEY REFERENCES records (record_id) ON DELETE CASCADE, \
+                    record_id INT NOT NULL REFERENCES records (record_id) ON DELETE CASCADE, \
                     map_id INT NOT NULL REFERENCES map_list (id) ON DELETE CASCADE, \
                     player_id INT NOT NULL REFERENCES players (id) ON DELETE CASCADE, \
                     class INT NOT NULL, \
@@ -1429,7 +1430,7 @@ void BuildDatabaseTables()
 
     g_hDatabase.Execute(t2, _, Thread_Empty_TransactionFail);
 
-    g_server = AuthServer();
+    AuthServer();
 
     return;
 }
