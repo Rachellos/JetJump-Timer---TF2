@@ -88,6 +88,8 @@ enum struct StageEnterTime
     int stage_id;
 
     float time;
+
+    bool exists;
 }
 
 enum struct Checkpoint

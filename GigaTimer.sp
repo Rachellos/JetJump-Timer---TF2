@@ -143,7 +143,7 @@ public void Thread_GetMapId(Database db, DBResultSet results, const char[] error
         g_currentMap.id = results.FetchInt(0);
 
         char query[256];
-        FormatEx(query, sizeof(query), "UPDATE map_list SET launches = launches + 1", g_currentMap.id );
+        FormatEx(query, sizeof(query), "UPDATE map_list SET launches = launches + 1 WHERE id = %i", g_currentMap.id );
         g_hDatabase.Query(Thread_Empty, query);
 
         InitZones();
@@ -153,7 +153,6 @@ public void Thread_GetMapId(Database db, DBResultSet results, const char[] error
         char query[256];
         FormatEx(query, sizeof(query), "INSERT INTO map_list (name) VALUES('%s')", g_currentMap.name );
         g_hDatabase.Query(Thread_Empty, query);
-
 
         // now we can get map id.
         InitMap();
@@ -297,15 +296,21 @@ void Thread_GetMapRecords(Database db, DBResultSet results, const char[] error, 
 
         g_records[i].exists = true;
 
+        for (int client = 1; client <= MaxClients; client++)
+        {
+            if ( g_run[client].type == g_records[i].runType && g_run[client].info.index == g_records[i].runIndex && g_player[client].currentClass == g_records[i].class )
+            {
+                g_run[client].worldRecord = g_records[ GetWorldRecordRunIndex(g_records[i].class, g_records[i].runType, g_records[i].runIndex) ];
+
+                if ( GetPersonalRecordRunIndex(g_player[client].id, g_records[i].class, g_records[i].runType, g_records[i].runIndex) != -1 )
+                    g_run[client].personalRecord = g_records[ GetPersonalRecordRunIndex(g_player[client].id, g_records[i].class, g_records[i].runType, g_records[i].runIndex) ];
+            }
+        }
+
         i++;
     }
 
-    if ( i > 0 )
-    {
-        PrintToServer("Loaded %i Records! For %s", i, g_currentMap.name);
-        MC_PrintToChatAll("Loaded {gold}%i {white}records!", i);
-    }
-    else
+    if ( i == 0 ) 
     {
         PrintToServer("No Records Found For %s", g_currentMap.name);
     }
@@ -334,13 +339,14 @@ void Thread_GetEnterStageTimes(Database db, DBResultSet results, const char[] er
 
         g_stageEnterTimes[i].time = results.FetchFloat(4);
 
+        g_stageEnterTimes[i].exists = true;
+
         i++;
     }
 
     if ( i > 0 )
     {
-        PrintToServer("Loaded %i Stage Enter Records! For %s", i, g_currentMap.name);
-        MC_PrintToChatAll("Loaded {gold}%i {white}Stage Enter records!", i);
+        PrintToServer("Reloaded %i Stage Enter Records! For %s", i, g_currentMap.name);
     }
 }
 
@@ -567,7 +573,7 @@ void SaveRecord(Player player, Run run)
                                     WHERE records.map_id = map_info.map_id AND run_type = %i AND run_id = %i AND class = %i) \
                                     WHERE map_id = %i AND run_type = %i AND run_id = %i;",
                                     player.currentClass == CLASS_SOLDIER ? "soldier_completions" : "demoman_completions",
-                                    run.type, run.type, player.currentClass,
+                                    run.type, run.info.index, player.currentClass,
                                     g_currentMap.id, run.type, run.info.index);
 
     transaction.AddQuery(query);
@@ -589,11 +595,11 @@ void SaveRecord(Player player, Run run)
             FormatEx(query, sizeof(query), "INSERT INTO enter_stage_times (record_id, map_id, player_id, class, stage_id, time) \
                                             VALUES \
                                             ( \
-                                                (SELECT record_id FROM records WHERE map_id = %i AND player_id = %i AND class = %i AND run_type = %i), \
+                                                (SELECT record_id FROM records WHERE map_id = %i AND player_id = %i AND class = %i AND run_type = %i AND run_id = %i), \
                                                 %i, %i, %i, %i, %f \
                                             ) \
                                             ON DUPLICATE KEY UPDATE time = %f;",
-                                            g_currentMap.id, player.id, player.currentClass, RUN_MAP,
+                                            g_currentMap.id, player.id, player.currentClass, RUN_MAP, 1,
                                             g_currentMap.id, player.id, player.currentClass, stage_id, run.stageEnterTime[stage_id],
                                             run.stageEnterTime[stage_id]);
             
@@ -902,9 +908,13 @@ void ClearZonesData()
 void ClearRecordsData()
 {
     Records emptyRecord;
+    StageEnterTime emptyStageEnter;
 
     for ( int i; i < RECORDS_LIMIT; i++ )
+    {
         g_records[i] = emptyRecord;
+        g_stageEnterTimes[i] = emptyStageEnter;
+    }
 }
 
 stock bool IsZoneExists(Zones zone, RunType runtype, int num)
@@ -1127,11 +1137,9 @@ void RecalculatePoints(RunType runtype, int run_id, Class class)
 
     transaction.AddQuery(query);
 
-    FormatEx(query, sizeof(query), "SELECT player_id, records.run_type, records.run_id, records.class, records.points, records.record_id, records.time, records.`rank`, map_info.soldier_completions \
+    FormatEx(query, sizeof(query), "SELECT player_id, records.run_type, records.run_id, records.class, records.points, records.`rank`, map_info.%s \
                                     FROM records JOIN map_info ON map_info.map_id = records.map_id AND map_info.run_type = records.run_type AND map_info.run_id = records.run_id \
-                                    WHERE records.map_id = %i AND records.run_type = %i AND records.run_id = %i AND records.class = %i;", g_currentMap.id, runtype, run_id, class);
-
-    PrintToServer(query);
+                                    WHERE records.map_id = %i AND records.run_type = %i AND records.run_id = %i AND records.class = %i;", class == CLASS_SOLDIER ? "soldier_completions" : "demoman_completions", g_currentMap.id, runtype, run_id, class);
 
     transaction.AddQuery(query);
 
@@ -1140,7 +1148,7 @@ void RecalculatePoints(RunType runtype, int run_id, Class class)
 
 public void Thread_GetUpdatedPoints (Database db, any data, int numQueries, DBResultSet[] results, any[] queryData)
 {
-    int player_id, record_id;
+    int player_id;
 
     RunType run_type;
 
@@ -1148,7 +1156,7 @@ public void Thread_GetUpdatedPoints (Database db, any data, int numQueries, DBRe
 
     Class class;
 
-    float points, time;
+    float points;
 
     int prIndex;
     float prevPoints;
@@ -1164,13 +1172,8 @@ public void Thread_GetUpdatedPoints (Database db, any data, int numQueries, DBRe
         class = view_as<Class>(results[1].FetchInt(3));
 
         points = results[1].FetchFloat(4);
-
-        record_id = results[1].FetchInt(5);
-
-        time = results[1].FetchFloat(6);
-
-        rank = results[1].FetchInt(7);
-        completions = results[1].FetchInt(8);
+        rank = results[1].FetchInt(5);
+        completions = results[1].FetchInt(6);
 
         prIndex = GetPersonalRecordRunIndex(player_id, class, run_type, run_id);
 
@@ -1183,68 +1186,26 @@ public void Thread_GetUpdatedPoints (Database db, any data, int numQueries, DBRe
             if ( g_player[i].id == player_id )
             {
                 if ( points != prevPoints )
-                    MC_PrintToChat(i, "You gain {%s}%.1f {white}points for {orange}%s", (points - prevPoints) > 0.0 ? "green" : "red", points - prevPoints,
+                    MC_PrintToChat(i, "You gain {%s}%.1f {white}%s points for {orange}%s", (points - prevPoints) > 0.0 ? "cyan" : "red", points - prevPoints, class == CLASS_SOLDIER ? "Soldier" : "Demoman",
                                     FindZoneArrayId(run_type, ZONE_START, run_id) != -1 ? g_zones[FindZoneArrayId(run_type, ZONE_START, run_id)].runInfo.runName : "Map" );
 
                 if ( rank != prevRank )
                 {
                     if ( prevRank == 0 )
                     {
-                        MC_PrintToChat(i, "Now rank: {blue}%i/%i on {orange}%s", rank, completions,
+                        MC_PrintToChat(i, "Now rank: {cyan}%i/%i {white}on {orange}%s {white}(%s)", rank, completions, class == CLASS_SOLDIER ? "Soldier" : "Demoman",
                                         FindZoneArrayId(run_type, ZONE_START, run_id) != -1 ? g_zones[FindZoneArrayId(run_type, ZONE_START, run_id)].runInfo.runName : "Map" );
                     }
                     else
                     {
-                        MC_PrintToChat(i, "Now rank: {blue}%i/%i (%s%i{white}) on {orange}%s", rank, completions, rank < prevRank ? "{green}" : "{red}+", rank - prevRank,
+                        MC_PrintToChat(i, "Now rank: {cyan}%i/%i {white}(%s%i{white}) on {orange}%s {white}(%s)", rank, completions, rank < prevRank ? "{cyan}" : "{red}+", rank - prevRank, class == CLASS_SOLDIER ? "Soldier" : "Demoman",
                                         FindZoneArrayId(run_type, ZONE_START, run_id) != -1 ? g_zones[FindZoneArrayId(run_type, ZONE_START, run_id)].runInfo.runName : "Map" );
                     }
                 }
             }
         }
-
-        if ( prIndex != -1 )
-        {
-            g_records[prIndex].points = points;
-            g_records[prIndex].rank = rank;
-            g_records[prIndex].time = time;
-        }
-        else
-        {
-            for (int i; i < RECORDS_LIMIT; i++)
-            {
-                if ( !g_records[i].exists )
-                {
-                    g_records[i].exists = true;
-
-                    g_records[i].player_id = player_id;
-                    g_records[i].record_id = record_id;
-                    g_records[i].runType = run_type;
-                    g_records[i].runIndex = run_id;
-                    g_records[i].class = class;
-                    g_records[i].points = points;
-                    g_records[i].rank = rank;
-                    g_records[i].time = time;
-
-                    for (int client = 1; client <= MaxClients; client++)
-                        if (g_player[client].id == player_id)
-                            strcopy(g_records[i].player_name, sizeof(Records::player_name), g_player[client].name);
-                    
-                    break;
-                }
-            }
-        }
-
-        for(int i = 0; i <= MaxClients; i++)
-        {
-            if ( g_run[i].type == run_type && g_run[i].info.index == run_id && g_player[i].currentClass == class )
-            {
-                g_run[i].worldRecord = g_records[ GetWorldRecordRunIndex(class, run_type, run_id) ];
-
-                if ( GetPersonalRecordRunIndex(g_player[i].id, class, run_type, run_id) != -1 )
-                    g_run[i].personalRecord = g_records[ GetPersonalRecordRunIndex(g_player[i].id, class, run_type, run_id) ];
-            }
-        }
     }
+    InitRecords();
 }
 
 void AuthServer()
@@ -1385,8 +1346,8 @@ public void Thread_GetPlayerInfo(Database db, DBResultSet results, const char[] 
 
         Transaction transaction = new Transaction();
 
-        char query[128];
-        FormatEx(query, sizeof(query), "UPDATE players SET online_on_server_id = %i, last_connection = NOW() WHERE id = %i", g_server.id, g_player[client].id);
+        char query[256];
+        FormatEx(query, sizeof(query), "UPDATE players SET online_on_server_id = %i, last_connection = NOW() WHERE id = %i;", g_server.id, g_player[client].id);
         transaction.AddQuery(query);
 
         FormatEx(query, sizeof(query), "UPDATE servers SET players = %i, total_joins = total_joins + 1 WHERE id = %i", GetClientCount(), g_server.id);
@@ -1423,14 +1384,13 @@ public void Thread_Empty(Database db, DBResultSet results, const char[] error, a
         LogError( error );
 	}
     delete db;
-
-    return;
 }
 
 // empty thread transaction callback for non-select queries (ON FAIL).
 public void Thread_Empty_TransactionFail(Database db, any data, int numQueries, const char[] error, int failIndex, any[] queryData)
 {
     PrintToServer("ERROR | %s", error);
+    PrintToServer("ERROR query index | %i", failIndex);
     LogError( error );
 }
 
@@ -1578,55 +1538,6 @@ void BuildDatabaseTables()
                 (10, 1200.0);");
 
     g_hDatabase.Execute(t, _, Thread_Empty_TransactionFail);
-
-
-    Transaction t2 = new Transaction();
-
-    t2.AddQuery("CREATE PROCEDURE IF NOT EXISTS `UpdateMapPoints`(IN `in_map_id` INT, IN `in_run_type` INT, IN `in_run_id` INT, IN `in_class` INT) NOT DETERMINISTIC CONTAINS SQL SQL SECURITY INVOKER BEGIN");
-    t2.AddQuery("DECLARE v_rec_id, v_player_id, completions, v_tier INT;");
-    t2.AddQuery("DECLARE v_rank INT DEFAULT 0;");
-    t2.AddQuery("DECLARE calculated_points, default_points, wr, pr DOUBLE;");
-    t2.AddQuery("DECLARE done INT DEFAULT FALSE;");
-    t2.AddQuery("DECLARE cur CURSOR FOR SELECT record_id, player_id, time FROM records WHERE map_id = in_map_id AND run_type = in_run_type AND run_id = in_run_id AND class = in_class ORDER BY time ASC;");
-    t2.AddQuery("DECLARE CONTINUE HANDLER FOR NOT FOUND SET done = TRUE;");
-    t2.AddQuery("OPEN cur;");
-    t2.AddQuery("SELECT COUNT(*) INTO completions FROM records WHERE map_id = in_map_id AND run_type = in_run_type AND run_id = in_run_id AND class = in_class;");
-    t2.AddQuery("IF in_class = 0");
-    t2.AddQuery("THEN");
-    t2.AddQuery("SELECT soldier_tier INTO v_tier FROM map_info WHERE map_id = in_map_id AND run_type = in_run_type AND run_id = in_run_id;");
-    t2.AddQuery("ELSEIF in_class = 1");
-    t2.AddQuery("THEN");
-    t2.AddQuery("SELECT demoman_tier INTO v_tier FROM map_info WHERE map_id = in_map_id AND run_type = in_run_type AND run_id = in_run_id;");
-    t2.AddQuery("END IF;");
-    t2.AddQuery("SELECT pts INTO default_points FROM points WHERE tier = v_tier;");
-    t2.AddQuery("loop_through_rows:LOOP");
-    t2.AddQuery("FETCH cur INTO v_rec_id, v_player_id, pr;");
-    t2.AddQuery("IF done THEN");
-    t2.AddQuery("LEAVE loop_through_rows;");
-    t2.AddQuery("END IF;");
-    t2.AddQuery("SET v_rank = v_rank + 1;");
-    t2.AddQuery("IF v_rank = 1");
-    t2.AddQuery("THEN");
-    t2.AddQuery("SET wr = pr;");
-    t2.AddQuery("SET calculated_points = default_points + ((default_points * ((wr / pr) * 1.5)) * 1.3) + completions;");
-    t2.AddQuery("ELSE");
-    t2.AddQuery("SET calculated_points = default_points + ((default_points * ((wr / pr) * 1.5)) / 1.3) + completions * 0.75;");
-    t2.AddQuery("END IF;");
-    t2.AddQuery("UPDATE records SET `records`.`rank` = (SELECT v_rank), `records`.`points` = (SELECT calculated_points) WHERE record_id = v_rec_id;");
-    t2.AddQuery("IF in_class = 0");
-    t2.AddQuery("THEN");
-    t2.AddQuery("UPDATE players SET soldier_points = (SELECT SUM(points) FROM records WHERE player_id = v_player_id AND class = in_class) WHERE id = v_player_id;");
-    t2.AddQuery("UPDATE players SET soldier_rank = (SELECT COUNT(*) + 1 FROM records WHERE (SELECT soldier_points WHERE id = v_player_id) > soldier_points) WHERE id = v_player_id;");
-    t2.AddQuery("ELSEIF in_class = 1");
-    t2.AddQuery("THEN");
-    t2.AddQuery("UPDATE players SET demoman_points = (SELECT SUM(points) FROM records WHERE player_id = v_player_id AND class = in_class) WHERE id = v_player_id;");
-    t2.AddQuery("UPDATE players SET demoman_rank = (SELECT COUNT(*) + 1 FROM records WHERE (SELECT demoman_points WHERE id = v_player_id) > demoman_points) WHERE id = v_player_id;");
-    t2.AddQuery("END IF;");
-    t2.AddQuery("END LOOP;");
-    t2.AddQuery("CLOSE cur;");
-    t2.AddQuery("END;");
-
-    g_hDatabase.Execute(t2, _, Thread_Empty_TransactionFail);
 
     AuthServer();
 
