@@ -4,6 +4,10 @@ void RegisterAllGigaCommands()
     AddAliasForCommand("sm_restart", "sm_r");
     AddAliasForCommand("sm_restart", "sm_reset");
     AddAliasForCommand("sm_restart", "sm_start");
+
+    RegisterGigaCommand("sm_timer", Command_TimerSwitch, "Toggle The timer mode");
+    AddAliasForCommand("sm_timer", "sm_enabletimer");
+    AddAliasForCommand("sm_timer", "sm_disabletimer");
 }
 
 void RegisterGigaCommand(const char[] command,
@@ -67,6 +71,12 @@ public Action Command_Restart(int client, int args)
 
     int zoneid = -1;
 
+    g_player[client].currentZone.arrayId = -1;
+    g_player[client].state = STATE_INVALID;
+
+    g_run[client].type = RUN_INVALID;
+    g_run[client].linearMode = false;
+
     if ( ( zoneid = FindZoneArrayId(RUN_MAP, ZONE_START) ) != -1 )
     {
         TeleportEntity(client, g_zones[zoneid].spawnPos, g_zones[zoneid].spawnAng, NULL_VEC);
@@ -78,6 +88,25 @@ public Action Command_Restart(int client, int args)
     else
     {
         MC_PrintToChat(client, "No zones for this map, can not respawn");
+    }
+
+    return Plugin_Handled;
+}
+
+public Action Command_TimerSwitch(int client, int args)
+{
+    if ( !(1 <= client <= MaxClients) ) return Plugin_Handled;
+
+    g_player[client].isTimerOn = !g_player[client].isTimerOn;
+
+    if ( g_player[client].isTimerOn )
+    {
+        MC_PrintToChat(client, "Timer {green}Enabled");
+        FakeClientCommand(client, "sm_restart");
+    }
+    else
+    {
+        MC_PrintToChat(client, "Timer {red}Disabled");
     }
 
     return Plugin_Handled;

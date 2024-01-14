@@ -264,7 +264,7 @@ public void Thread_GetMapZones(Database db, DBResultSet results, const char[] er
 void InitRecords()
 {
     char query[512];
-    FormatEx(query, sizeof(query), "SELECT record_id, player_id, players.name, class, run_type, run_id, time, points \
+    FormatEx(query, sizeof(query), "SELECT record_id, player_id, players.name, class, run_type, run_id, time, points, `rank` \
                                     FROM records JOIN players ON records.player_id = players.id \
                                     WHERE map_id = %i", g_currentMap.id );
     
@@ -293,6 +293,7 @@ void Thread_GetMapRecords(Database db, DBResultSet results, const char[] error, 
 
         g_records[i].time = results.FetchFloat(6);
         g_records[i].points = results.FetchFloat(7);
+        g_records[i].rank = results.FetchInt(8);
 
         g_records[i].exists = true;
 
@@ -462,19 +463,17 @@ public void Event_Touch_Zone( int trigger, int client )
 
         g_player[client].currentZone = g_zones[id];
         g_player[client].state = STATE_START;
-        
     }
     else if ( g_zones[id].zoneType == ZONE_END && g_player[client].state == STATE_RUNNING)
     {
         if ( g_zones[id].runType != g_run[client].type || g_zones[id].runInfo.index != g_run[client].info.index ) return;
 
-        if ( !g_player[client].isTimerOn ) return;
-
         g_player[client].currentZone = g_zones[id];
 
         g_player[client].state = STATE_END;
 
-        NotifyRecordInChat(client, g_run[client]);
+        if ( g_player[client].isTimerOn )
+            NotifyRecordInChat(client, g_run[client]);
     }
     else if ( g_zones[id].zoneType == ZONE_CHECKPOINT )
     {
@@ -624,18 +623,19 @@ void SaveRecord(Player player, Run run)
 
 void DrawPlayersHud()
 {
-    int player;
+    static int player;
 
-    State state;
-    Run run;
+    static State state;
+    static Run run;
 
-    float currentTime;
-    char currentTimeText[TIME_SIZE_DEF];
+    static float currentTime;
+    static char currentTimeText[TIME_SIZE_DEF];
 
-    char type[32];
-    char hud[256];
+    static char type[32];
+    static char hud[256];
 
-    float engineTime = GetEngineTime();
+    static float engineTime;
+    engineTime = GetEngineTime();
 
     static float whenDrawHud[MAXPLAYERS+1];
     static bool shouldDrawHud[MAXPLAYERS+1];
@@ -705,6 +705,9 @@ void DrawPlayersHud()
                     currentTime = engineTime - run.startTime;
                     FormatSeconds(currentTime, currentTimeText, FORMAT_2DECI);
 
+                    if (!g_player[player].isTimerOn)
+                        FormatEx(currentTimeText, sizeof(currentTimeText), "[Timer OFF]");
+
                     FormatEx(hud, sizeof(hud), "%s\n \n(%s %s)\n \n%s",
                     currentTimeText,
                     run.info.runName,
@@ -724,21 +727,76 @@ void DrawPlayersHud()
             
             FormatSeconds(currentTime, currentTimeText, FORMAT_2DECI);
 
+            if (!g_player[player].isTimerOn)
+                FormatEx(currentTimeText, sizeof(currentTimeText), "[Timer OFF]");
+
             FormatEx(hud, sizeof(hud), "%s\n \n(%s)\n \n%s (tier %i)", currentTimeText, run.info.runName, type, run.info.tier[g_player[player].currentClass]);
 
             shouldDrawHud[client] = true;
+        }
+        else if ( state == STATE_INVALID )
+        {
+            if (whenDrawHud[client] < engineTime)
+            {
+                shouldDrawHud[client] = true;
+                whenDrawHud[client] = engineTime + 0.5;
+            }
+            else
+            {
+                shouldDrawHud[client] = false;
+            }
+
+            FormatEx(hud, sizeof(hud), "[Enter the Start Zone]");
         }
 
 
         if (shouldDrawHud[client])
         {
-            PrintHintText( client, hud);
+            PrintHintText( client, hud );
             shouldDrawHud[client] = false;
+
+            if ( state != STATE_INVALID )
+            {
+                FormatSeconds(g_run[player].personalRecord.time, currentTimeText, FORMAT_2DECI);
+                FormatEx(hud, sizeof(hud), "Personal Record: %s", currentTimeText);
+
+                FormatSeconds(g_run[player].worldRecord.time, currentTimeText, FORMAT_2DECI);
+                FormatEx(hud, sizeof(hud), "%s\n\nWorld Record: %s (%s)", hud, currentTimeText, g_run[player].worldRecord.player_name);
+                PrintHintTextRightSide(client, hud);
+            }
         }
     }
 
     // fuck yea
     RequestFrame( DrawPlayersHud );
+}
+
+stock bool PrintHintTextRightSide(int client, const char[] format, any ...)
+{
+	Handle userMessage = StartMessageOne("KeyHintText", client);
+
+	if (userMessage == INVALID_HANDLE) {
+		return false;
+	}
+
+	char buffer[254];
+
+	SetGlobalTransTarget(client);
+	VFormat(buffer, sizeof(buffer), format, 3);
+
+	if (GetFeatureStatus(FeatureType_Native, "GetUserMessageType") == FeatureStatus_Available
+		&& GetUserMessageType() == UM_Protobuf) {
+
+		PbAddString(userMessage, "hints", buffer);
+	}
+	else {
+		BfWriteByte(userMessage, 1);
+		BfWriteString(userMessage, buffer);
+	}
+
+	EndMessage();
+
+	return true;
 }
 
 stock int GetCurrentSpectatingClient(int client)
@@ -1063,13 +1121,17 @@ stock bool IsInsideBounds( int ent, float vecMins[3], float vecMaxs[3] )
 void RecalculatePoints(RunType runtype, int run_id, Class class)
 {
     Transaction transaction = new Transaction();
-    char query[256];
+    char query[1024];
     
     FormatEx(query, sizeof(query), "CALL UpdateMapPoints(%i, %i, %i, %i);", g_currentMap.id, runtype, run_id, class);
 
     transaction.AddQuery(query);
 
-    FormatEx(query, sizeof(query), "SELECT player_id, run_type, run_id, class, points, record_id, time FROM records WHERE map_id = %i AND run_type = %i AND run_id = %i AND class = %i", g_currentMap.id, runtype, run_id, class);
+    FormatEx(query, sizeof(query), "SELECT player_id, records.run_type, records.run_id, records.class, records.points, records.record_id, records.time, records.`rank`, map_info.soldier_completions \
+                                    FROM records JOIN map_info ON map_info.map_id = records.map_id AND map_info.run_type = records.run_type AND map_info.run_id = records.run_id \
+                                    WHERE records.map_id = %i AND records.run_type = %i AND records.run_id = %i AND records.class = %i;", g_currentMap.id, runtype, run_id, class);
+
+    PrintToServer(query);
 
     transaction.AddQuery(query);
 
@@ -1091,6 +1153,8 @@ public void Thread_GetUpdatedPoints (Database db, any data, int numQueries, DBRe
     int prIndex;
     float prevPoints;
 
+    int rank, prevRank, completions;
+
     while ( results[1].FetchRow() )
     {
         player_id = results[1].FetchInt(0);
@@ -1105,21 +1169,44 @@ public void Thread_GetUpdatedPoints (Database db, any data, int numQueries, DBRe
 
         time = results[1].FetchFloat(6);
 
+        rank = results[1].FetchInt(7);
+        completions = results[1].FetchInt(8);
+
         prIndex = GetPersonalRecordRunIndex(player_id, class, run_type, run_id);
 
         prevPoints = prIndex != -1 ? g_records[prIndex].points : 0.0;
 
+        prevRank = prIndex != -1 ? g_records[prIndex].rank : 0;
+
         for (int i = 1; i <= MaxClients; i++)
         {
             if ( g_player[i].id == player_id )
+            {
                 if ( points != prevPoints )
-                    MC_PrintToChat(i, "You gain {%s}%.1f {white}points for %s", (points - prevPoints) > 0.0 ? "green" : "red", points - prevPoints,
+                    MC_PrintToChat(i, "You gain {%s}%.1f {white}points for {orange}%s", (points - prevPoints) > 0.0 ? "green" : "red", points - prevPoints,
                                     FindZoneArrayId(run_type, ZONE_START, run_id) != -1 ? g_zones[FindZoneArrayId(run_type, ZONE_START, run_id)].runInfo.runName : "Map" );
+
+                if ( rank != prevRank )
+                {
+                    if ( prevRank == 0 )
+                    {
+                        MC_PrintToChat(i, "Now rank: {blue}%i/%i on {orange}%s", rank, completions,
+                                        FindZoneArrayId(run_type, ZONE_START, run_id) != -1 ? g_zones[FindZoneArrayId(run_type, ZONE_START, run_id)].runInfo.runName : "Map" );
+                    }
+                    else
+                    {
+                        MC_PrintToChat(i, "Now rank: {blue}%i/%i (%s%i{white}) on {orange}%s", rank, completions, rank < prevRank ? "{green}" : "{red}+", rank - prevRank,
+                                        FindZoneArrayId(run_type, ZONE_START, run_id) != -1 ? g_zones[FindZoneArrayId(run_type, ZONE_START, run_id)].runInfo.runName : "Map" );
+                    }
+                }
+            }
         }
 
         if ( prIndex != -1 )
         {
             g_records[prIndex].points = points;
+            g_records[prIndex].rank = rank;
+            g_records[prIndex].time = time;
         }
         else
         {
@@ -1135,6 +1222,7 @@ public void Thread_GetUpdatedPoints (Database db, any data, int numQueries, DBRe
                     g_records[i].runIndex = run_id;
                     g_records[i].class = class;
                     g_records[i].points = points;
+                    g_records[i].rank = rank;
                     g_records[i].time = time;
 
                     for (int client = 1; client <= MaxClients; client++)
@@ -1143,6 +1231,17 @@ public void Thread_GetUpdatedPoints (Database db, any data, int numQueries, DBRe
                     
                     break;
                 }
+            }
+        }
+
+        for(int i = 0; i <= MaxClients; i++)
+        {
+            if ( g_run[i].type == run_type && g_run[i].info.index == run_id && g_player[i].currentClass == class )
+            {
+                g_run[i].worldRecord = g_records[ GetWorldRecordRunIndex(class, run_type, run_id) ];
+
+                if ( GetPersonalRecordRunIndex(g_player[i].id, class, run_type, run_id) != -1 )
+                    g_run[i].personalRecord = g_records[ GetPersonalRecordRunIndex(g_player[i].id, class, run_type, run_id) ];
             }
         }
     }

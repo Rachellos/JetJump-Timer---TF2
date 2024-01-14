@@ -72,6 +72,7 @@ enum struct Records
 
     float time;
     float points;
+    int rank;
 
     bool exists;
 }
