@@ -71,6 +71,7 @@ enum struct Records
     int runIndex;
 
     float time;
+    float points;
 
     bool exists;
 }

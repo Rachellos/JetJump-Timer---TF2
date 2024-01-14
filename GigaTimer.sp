@@ -181,15 +181,24 @@ public void Thread_GetMapZones(Database db, DBResultSet results, const char[] er
 {
     if ( strlen(error) > 1 ) { LogError(error); return; }
 
-    int i = 0;
+    int zones_count = 0;
 
-    while ( results.FetchRow() )
+    for (int i = 1; results.FetchRow(); i++ )
     {
         g_zones[i].zoneType = view_as<Zones>(results.FetchInt(0));
         g_zones[i].zoneIndex = results.FetchInt(1);
 
         g_zones[i].runType = view_as<RunType>(results.FetchInt(2));
         g_zones[i].runInfo.index = results.FetchInt(3);
+
+        if (g_zones[i].runType == RUN_STAGE)
+        {
+            g_zones[0].runType = RUN_MAP;
+            FormatEx( g_zones[0].runInfo.runName, sizeof(RunInfo::runName), "Map" );
+            g_zones[0].runInfo.index = 1;
+            g_zones[0].zoneType = ZONE_START;
+            g_zones[0].zoneIndex = 0;
+        }
 
         g_zones[i].cordMin[0] = results.FetchFloat(4);
         g_zones[i].cordMin[1] = results.FetchFloat(5);
@@ -231,13 +240,13 @@ public void Thread_GetMapZones(Database db, DBResultSet results, const char[] er
 
         CreateZoneEntity( i ); // Creating touch/leave hook 
 
-        i++;
+        zones_count++;
     }
 
-    if ( i > 0 )
+    if ( zones_count > 0 )
     {
-        PrintToServer("Loaded %i zones! for %s", i, g_currentMap.name);
-        MC_PrintToChatAll("Loaded {gold}%i {white}zones!", i);
+        PrintToServer("Loaded %i zones! for %s", zones_count, g_currentMap.name);
+        MC_PrintToChatAll("Loaded {gold}%i {white}zones!", zones_count);
     }
     else
     {
@@ -255,7 +264,7 @@ public void Thread_GetMapZones(Database db, DBResultSet results, const char[] er
 void InitRecords()
 {
     char query[512];
-    FormatEx(query, sizeof(query), "SELECT record_id, player_id, players.name, class, run_type, run_id, time \
+    FormatEx(query, sizeof(query), "SELECT record_id, player_id, players.name, class, run_type, run_id, time, points \
                                     FROM records JOIN players ON records.player_id = players.id \
                                     WHERE map_id = %i", g_currentMap.id );
     
@@ -283,6 +292,7 @@ void Thread_GetMapRecords(Database db, DBResultSet results, const char[] error, 
         g_records[i].runIndex = results.FetchInt(5);
 
         g_records[i].time = results.FetchFloat(6);
+        g_records[i].points = results.FetchFloat(7);
 
         g_records[i].exists = true;
 
@@ -440,7 +450,7 @@ public void Event_Touch_Zone( int trigger, int client )
             }
         }
 
-        int prIndex = GetPersonalRecordRunIndex(client, g_player[client].currentClass, g_zones[id].runType, g_zones[id].runInfo.index);
+        int prIndex = GetPersonalRecordRunIndex(g_player[client].id, g_player[client].currentClass, g_zones[id].runType, g_zones[id].runInfo.index);
         int wrIndex = GetWorldRecordRunIndex(g_player[client].currentClass, g_zones[id].runType, g_zones[id].runInfo.index); 
 
         Records emptyRecord;
@@ -508,6 +518,8 @@ void NotifyRecordInChat(int client, Run run)
 {
     char time[TIME_SIZE_DEF];
     
+    int prIndex = GetPersonalRecordRunIndex(g_player[client].id, g_player[client].currentClass, run.type, run.info.index)
+
     if ( run.type == RUN_MAP || run.type == RUN_BONUS )
     {
         run.finishTime = GetEngineTime() - run.startTime;
@@ -515,7 +527,8 @@ void NotifyRecordInChat(int client, Run run)
         FormatSeconds(run.finishTime, time);
         MC_PrintToChatAll( "{yellow}%N {white}finished the {haunted}%s{white}: ({hotpink}%s{white})", client, run.info.runName, time );
 
-        SaveRecord(g_player[client], run);
+        if ( prIndex == -1 || run.finishTime < g_records[prIndex].time )
+            SaveRecord(g_player[client], run);
     }
     else if ( run.type == RUN_STAGE )
     {
@@ -523,12 +536,14 @@ void NotifyRecordInChat(int client, Run run)
         
         FormatSeconds(run.stageFinishTime, time);
         MC_PrintToChatAll( "{gold}%N {white}finished the {haunted}%s{white}: ({hotpink}%s{white})", client, run.info.runName, time );
-
-        SaveRecord(g_player[client], run);
+        
+        if ( prIndex == -1 || run.stageFinishTime < g_records[prIndex].time )
+            SaveRecord(g_player[client], run);
 
         if ( !IsZoneExists(ZONE_START, RUN_STAGE, g_player[client].currentZone.runInfo.index + 1 ) && run.linearMode)
         {
-            run.type = RUN_MAP;
+            run.type = g_zones[0].runType;
+            run.info = g_zones[0].runInfo;
 
             NotifyRecordInChat(client, run);
         }
@@ -543,7 +558,7 @@ void SaveRecord(Player player, Run run)
 
     // Add/Update record to the database here
     FormatEx(query, sizeof(query), "INSERT INTO records (map_id, player_id, class, run_type, run_id, time, server_id) VALUES(%i, %i, %i, %i, %i, %f, %i) \
-                                    ON DUPLICATE KEY UPDATE time = %f, server_id = %i",
+                                    ON DUPLICATE KEY UPDATE time = %f, date = NOW(), server_id = %i;",
                                     g_currentMap.id, player.id, player.currentClass, run.type, run.type != RUN_MAP ? run.info.index : 1, run.type == RUN_STAGE ? run.stageFinishTime : run.finishTime, g_server.id,
                                     run.type == RUN_STAGE ? run.stageFinishTime : run.finishTime, g_server.id);
 
@@ -551,18 +566,26 @@ void SaveRecord(Player player, Run run)
 
     FormatEx(query, sizeof(query), "UPDATE map_info SET %s = (SELECT COUNT(*) FROM records \
                                     WHERE records.map_id = map_info.map_id AND run_type = %i AND run_id = %i AND class = %i) \
-                                    WHERE map_id = %i AND run_type = %i AND run_id = %i",
+                                    WHERE map_id = %i AND run_type = %i AND run_id = %i;",
                                     player.currentClass == CLASS_SOLDIER ? "soldier_completions" : "demoman_completions",
-                                    run.type, run.type != RUN_MAP ? run.info.index : 1, player.currentClass,
+                                    run.type, run.type, player.currentClass,
                                     g_currentMap.id, run.type, run.info.index);
 
     transaction.AddQuery(query);
 
     // that means player just finish stages map correctly
-    if ( run.type == RUN_MAP && run.info.index > 1 && run.linearMode )
+    int lastStage;
+
+    for (int i = 1; i < ZONES_LIMIT; i++)
+    {
+        if ( FindZoneArrayId(RUN_STAGE, ZONE_START, i) != -1)
+            lastStage++;
+    }
+
+    if ( run.type == RUN_MAP && lastStage > 1 && run.linearMode )
     {
         // we start by stage 2 obviously
-        for (int stage_id = 2; stage_id <= run.info.index; stage_id++)
+        for (int stage_id = 2; stage_id <= lastStage; stage_id++)
         {
             FormatEx(query, sizeof(query), "INSERT INTO enter_stage_times (record_id, map_id, player_id, class, stage_id, time) \
                                             VALUES \
@@ -570,7 +593,7 @@ void SaveRecord(Player player, Run run)
                                                 (SELECT record_id FROM records WHERE map_id = %i AND player_id = %i AND class = %i AND run_type = %i), \
                                                 %i, %i, %i, %i, %f \
                                             ) \
-                                            ON DUPLICATE KEY UPDATE time = %f",
+                                            ON DUPLICATE KEY UPDATE time = %f;",
                                             g_currentMap.id, player.id, player.currentClass, RUN_MAP,
                                             g_currentMap.id, player.id, player.currentClass, stage_id, run.stageEnterTime[stage_id],
                                             run.stageEnterTime[stage_id]);
@@ -837,11 +860,11 @@ stock bool IsZoneExists(Zones zone, RunType runtype, int num)
     return false;
 }
 
-stock int GetPersonalRecordRunIndex(int client, Class class, RunType runType, int run_id)
+stock int GetPersonalRecordRunIndex(int player_id, Class class, RunType runType, int run_id)
 {
     for (int i = 0; i < RECORDS_LIMIT; i++)
     {
-        if ( g_records[i].player_id == g_player[client].id && g_records[i].class == class && g_records[i].runType == runType && g_records[i].runIndex == run_id && g_records[i].exists )
+        if ( g_records[i].player_id == player_id && g_records[i].class == class && g_records[i].runType == runType && g_records[i].runIndex == run_id && g_records[i].exists )
             return i;
     }
 
@@ -891,7 +914,7 @@ stock int GetStageEnterWorldRecordIndex(Class class, int stage_id)
 
 stock int GetStageEnterPersonalRecordIndex(int client, Class class, int stage_id)
 {
-    int prIndex = GetPersonalRecordRunIndex(client, class, RUN_MAP, 1);
+    int prIndex = GetPersonalRecordRunIndex(g_player[client].id, class, RUN_MAP, 1);
 
     if ( prIndex == -1 )
         return -1;
@@ -1046,7 +1069,83 @@ void RecalculatePoints(RunType runtype, int run_id, Class class)
 
     transaction.AddQuery(query);
 
-    g_hDatabase.Execute(transaction, _, Thread_Empty_TransactionFail);
+    FormatEx(query, sizeof(query), "SELECT player_id, run_type, run_id, class, points, record_id, time FROM records WHERE map_id = %i AND run_type = %i AND run_id = %i AND class = %i", g_currentMap.id, runtype, run_id, class);
+
+    transaction.AddQuery(query);
+
+    g_hDatabase.Execute(transaction, Thread_GetUpdatedPoints, Thread_Empty_TransactionFail);
+}
+
+public void Thread_GetUpdatedPoints (Database db, any data, int numQueries, DBResultSet[] results, any[] queryData)
+{
+    int player_id, record_id;
+
+    RunType run_type;
+
+    int run_id;
+
+    Class class;
+
+    float points, time;
+
+    int prIndex;
+    float prevPoints;
+
+    while ( results[1].FetchRow() )
+    {
+        player_id = results[1].FetchInt(0);
+        run_type = view_as<RunType>(results[1].FetchInt(1));
+        run_id = results[1].FetchInt(2);
+
+        class = view_as<Class>(results[1].FetchInt(3));
+
+        points = results[1].FetchFloat(4);
+
+        record_id = results[1].FetchInt(5);
+
+        time = results[1].FetchFloat(6);
+
+        prIndex = GetPersonalRecordRunIndex(player_id, class, run_type, run_id);
+
+        prevPoints = prIndex != -1 ? g_records[prIndex].points : 0.0;
+
+        for (int i = 1; i <= MaxClients; i++)
+        {
+            if ( g_player[i].id == player_id )
+                if ( points != prevPoints )
+                    MC_PrintToChat(i, "You gain {%s}%.1f {white}points for %s", (points - prevPoints) > 0.0 ? "green" : "red", points - prevPoints,
+                                    FindZoneArrayId(run_type, ZONE_START, run_id) != -1 ? g_zones[FindZoneArrayId(run_type, ZONE_START, run_id)].runInfo.runName : "Map" );
+        }
+
+        if ( prIndex != -1 )
+        {
+            g_records[prIndex].points = points;
+        }
+        else
+        {
+            for (int i; i < RECORDS_LIMIT; i++)
+            {
+                if ( !g_records[i].exists )
+                {
+                    g_records[i].exists = true;
+
+                    g_records[i].player_id = player_id;
+                    g_records[i].record_id = record_id;
+                    g_records[i].runType = run_type;
+                    g_records[i].runIndex = run_id;
+                    g_records[i].class = class;
+                    g_records[i].points = points;
+                    g_records[i].time = time;
+
+                    for (int client = 1; client <= MaxClients; client++)
+                        if (g_player[client].id == player_id)
+                            strcopy(g_records[i].player_name, sizeof(Records::player_name), g_player[client].name);
+                    
+                    break;
+                }
+            }
+        }
+    }
 }
 
 void AuthServer()
