@@ -400,7 +400,7 @@ public void Event_Touch_Zone( int trigger, int client )
         }
         else if (g_zones[id].runType == RUN_STAGE)
         {
-            if ( g_zones[id].runInfo.index == g_run[client].info.index + 1 && g_player[client].state == STATE_END && g_run[client].linearMode )
+            if ( g_zones[id].runInfo.index == g_run[client].info.index + 1 && g_player[client].state == STATE_END && g_run[client].type == RUN_STAGE && g_run[client].linearMode && g_player[client].isTimerOn )
             {
                 float currentTime = GetEngineTime() - g_run[client].startTime;
                 char currentTimeText[TIME_SIZE_DEF];
@@ -432,6 +432,7 @@ public void Event_Touch_Zone( int trigger, int client )
             // player try to cheat stages run, stop him.
             else if ( ( (g_zones[id].runInfo.index - g_run[client].info.index) > 1
                     || ( g_run[client].info.index == g_zones[id].runInfo.index - 1 && g_player[client].state != STATE_END) )
+                    && g_run[client].type == RUN_STAGE
                     && g_run[client].linearMode )
             {
                 MC_PrintToChat(client, "{red}ERROR {white}| Your run was {red}closed{white}, becouse you not finished:")
@@ -440,7 +441,7 @@ public void Event_Touch_Zone( int trigger, int client )
 
                 for (int i = g_zones[id].runInfo.index - 1; i >= lastUnfinishedRun; i--)
                 {
-                    MC_PrintToChat(client, "{gold}Stage{white} %i", i);
+                    MC_PrintToChat(client, "{cyan}Stage {gold}%i", i);
                 }
 
                 g_run[client].linearMode = false;
@@ -521,16 +522,46 @@ public void Event_EndTouch_Zone( int trigger, int client )
 
 void NotifyRecordInChat(int client, Run run)
 {
+    if ( g_player[client].currentClass == CLASS_INVALID ) return;
+
     char time[TIME_SIZE_DEF];
+    char comparisonText[128], comparisonTimeText[TIME_SIZE_DEF];
     
-    int prIndex = GetPersonalRecordRunIndex(g_player[client].id, g_player[client].currentClass, run.type, run.info.index)
+    int prIndex = GetPersonalRecordRunIndex(g_player[client].id, g_player[client].currentClass, run.type, run.info.index);
+    int wrIndex = GetWorldRecordRunIndex(g_player[client].currentClass, run.type, run.info.index);
 
     if ( run.type == RUN_MAP || run.type == RUN_BONUS )
     {
         run.finishTime = GetEngineTime() - run.startTime;
 
+        if ( prIndex != -1 )
+        {
+            g_run[client].personalRecord = g_records[prIndex];
+            run.personalRecord = g_run[client].personalRecord;
+        }
+
+        if (wrIndex != -1)
+        {
+            g_run[client].worldRecord = g_records[wrIndex];
+            run.worldRecord = g_run[client].worldRecord;
+        }
+
+        if ( run.worldRecord.exists )
+        {
+            int prefix = run.finishTime >= run.worldRecord.time ? '+' : '-';
+                        
+            FormatSeconds(run.finishTime >= run.worldRecord.time ? run.finishTime - run.worldRecord.time : run.worldRecord.time - run.finishTime, comparisonTimeText);
+            FormatEx(comparisonText, sizeof(comparisonText), "{white}({%s}WR %c%s{white})", prefix == '+' ? "lightskyblue" : "red", prefix, comparisonTimeText);
+
+            if ( prIndex != -1 && g_run[client].personalRecord.time > run.finishTime )
+            {
+                FormatSeconds(run.personalRecord.time - run.finishTime, comparisonTimeText);
+                FormatEx(comparisonText, sizeof(comparisonText), "%s | improved by {green}%s", comparisonText, comparisonTimeText);
+            }
+        }
+
         FormatSeconds(run.finishTime, time);
-        MC_PrintToChatAll( "{yellow}%N {white}finished the {haunted}%s{white}: ({hotpink}%s{white})", client, run.info.runName, time );
+        MC_PrintToChatAll( "{yellow}%N {white}finished the {cyan}%s{white}: {hotpink}%s %s", client, run.info.runName, time, comparisonText );
 
         if ( prIndex == -1 || run.finishTime < g_records[prIndex].time )
             SaveRecord(g_player[client], run);
@@ -539,8 +570,22 @@ void NotifyRecordInChat(int client, Run run)
     {
         run.stageFinishTime = GetEngineTime() - run.stageStartTime;
         
+        if ( run.worldRecord.exists )
+        {
+            int prefix = run.stageFinishTime >= run.worldRecord.time ? '+' : '-';
+                        
+            FormatSeconds(run.stageFinishTime >= run.worldRecord.time ? run.stageFinishTime - run.worldRecord.time : run.worldRecord.time - run.stageFinishTime, comparisonTimeText);
+            FormatEx(comparisonText, sizeof(comparisonText), "{white}({%s}WR %c%s{white})", prefix == '+' ? "lightskyblue" : "red", prefix, comparisonTimeText);
+
+            if ( prIndex != -1 && g_run[client].personalRecord.time > run.stageFinishTime )
+            {
+                FormatSeconds(run.personalRecord.time - run.stageFinishTime, comparisonTimeText);
+                FormatEx(comparisonText, sizeof(comparisonText), "%s | improved by {green}%s", comparisonText, comparisonTimeText);
+            }
+        }
+
         FormatSeconds(run.stageFinishTime, time);
-        MC_PrintToChatAll( "{gold}%N {white}finished the {haunted}%s{white}: ({hotpink}%s{white})", client, run.info.runName, time );
+        MC_PrintToChatAll( "{gold}%N {white}finished the {cyan}%s{white}: {hotpink}%s %s", client, run.info.runName, time, comparisonText );
         
         if ( prIndex == -1 || run.stageFinishTime < g_records[prIndex].time )
             SaveRecord(g_player[client], run);
@@ -595,11 +640,11 @@ void SaveRecord(Player player, Run run)
             FormatEx(query, sizeof(query), "INSERT INTO enter_stage_times (record_id, map_id, player_id, class, stage_id, time) \
                                             VALUES \
                                             ( \
-                                                (SELECT record_id FROM records WHERE map_id = %i AND player_id = %i AND class = %i AND run_type = %i AND run_id = %i), \
+                                                (SELECT record_id FROM records WHERE map_id = %i AND player_id = %i AND class = %i AND run_type = 0 AND run_id = 1), \
                                                 %i, %i, %i, %i, %f \
                                             ) \
                                             ON DUPLICATE KEY UPDATE time = %f;",
-                                            g_currentMap.id, player.id, player.currentClass, RUN_MAP, 1,
+                                            g_currentMap.id, player.id, player.currentClass,
                                             g_currentMap.id, player.id, player.currentClass, stage_id, run.stageEnterTime[stage_id],
                                             run.stageEnterTime[stage_id]);
             
@@ -660,6 +705,8 @@ void DrawPlayersHud()
             // oh no, you dont spectate at any players
             if ( player == -1 ) continue;
         }
+
+        if ( g_player[player].currentClass == CLASS_INVALID ) continue;
 
         run = g_run[player];
         state = g_player[player].state;
@@ -1459,7 +1506,7 @@ void BuildDatabaseTables()
 
     t.AddQuery( "CREATE TABLE IF NOT EXISTS map_info \
                 (\
-                    map_id INT NOT NULL REFERENCES map_list (id) ON DELETE CASCADE, \
+                    map_id INT NOT NULL, \
                     run_type INT NOT NULL, \
                     run_id INT NOT NULL, \
                     \
@@ -1468,7 +1515,9 @@ void BuildDatabaseTables()
                     soldier_completions INT NOT NULL DEFAULT 0, \
                     demoman_completions INT NOT NULL DEFAULT 0, \
                     regen_ammo INT NOT NULL DEFAULT -1, \
-                    \
+                    FOREIGN KEY (map_id) REFERENCES map_list (id) \
+                    ON DELETE CASCADE \
+                    ON UPDATE CASCADE, \
                     UNIQUE KEY map_info_index (map_id, run_type, run_id) \
                 );");
 
@@ -1495,8 +1544,8 @@ void BuildDatabaseTables()
     t.AddQuery( "CREATE TABLE IF NOT EXISTS records \
                 ( \
                     record_id INT NOT NULL PRIMARY KEY AUTO_INCREMENT, \
-                    map_id INT NOT NULL REFERENCES map_list (id) ON DELETE CASCADE, \
-                    player_id INT NOT NULL REFERENCES players (id) ON DELETE CASCADE, \
+                    map_id INT NOT NULL, \
+                    player_id INT NOT NULL, \
                     class INT NOT NULL, \
                     run_type INT NOT NULL, \
                     run_id INT NOT NULL, \
@@ -1505,17 +1554,32 @@ void BuildDatabaseTables()
                     points DOUBLE DEFAULT NULL, \
                     server_id INT NOT NULL REFERENCES servers (id), \
                     date DATETIME NOT NULL DEFAULT NOW(), \
+                    FOREIGN KEY (map_id) REFERENCES map_list (id) \
+                    ON DELETE CASCADE \
+                    ON UPDATE CASCADE, \
+                    FOREIGN KEY (player_id) REFERENCES players (id) \
+                    ON DELETE CASCADE \
+                    ON UPDATE CASCADE, \
                     UNIQUE KEY records_indexes (map_id, player_id, class, run_type, run_id) \
                 );");
 
     t.AddQuery( "CREATE TABLE IF NOT EXISTS enter_stage_times \
                 ( \
-                    record_id INT NOT NULL REFERENCES records (record_id) ON DELETE CASCADE, \
-                    map_id INT NOT NULL REFERENCES map_list (id) ON DELETE CASCADE, \
-                    player_id INT NOT NULL REFERENCES players (id) ON DELETE CASCADE, \
+                    record_id INT NOT NULL, \
+                    map_id INT NOT NULL, \
+                    player_id INT NOT NULL, \
                     class INT NOT NULL, \
                     stage_id INT NOT NULL, \
                     time DOUBLE NOT NULL, \
+                    FOREIGN KEY (record_id) REFERENCES records (record_id) \
+                    ON DELETE CASCADE \
+                    ON UPDATE CASCADE, \
+                    FOREIGN KEY (map_id) REFERENCES map_list (id) \
+                    ON DELETE CASCADE \
+                    ON UPDATE CASCADE, \
+                    FOREIGN KEY (player_id) REFERENCES players (id) \
+                    ON DELETE CASCADE \
+                    ON UPDATE CASCADE, \
                     UNIQUE KEY stages_enter_index (map_id, player_id, class, stage_id) \
                 );");
 

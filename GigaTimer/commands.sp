@@ -8,6 +8,12 @@ void RegisterAllGigaCommands()
     RegisterGigaCommand("sm_timer", Command_TimerSwitch, "Toggle The timer mode");
     AddAliasForCommand("sm_timer", "sm_enabletimer");
     AddAliasForCommand("sm_timer", "sm_disabletimer");
+
+    RegisterGigaCommand("sm_setstart", Command_SetStartPosition, "Set start position");
+    AddAliasForCommand("sm_setstart", "sm_set");
+
+    RegisterGigaCommand("sm_clearstart", Command_ClearStartPosition, "Clear start position");
+    AddAliasForCommand("sm_clearstart", "sm_clear");
 }
 
 void RegisterGigaCommand(const char[] command,
@@ -77,7 +83,11 @@ public Action Command_Restart(int client, int args)
     g_run[client].type = RUN_INVALID;
     g_run[client].linearMode = false;
 
-    if ( ( zoneid = FindZoneArrayId(RUN_MAP, ZONE_START) ) != -1 )
+    if ( g_player[client].setStartExists )
+    {
+        TeleportEntity(client, g_player[client].setStartPos, g_player[client].setStartAng, NULL_VEC);
+    }
+    else if ( ( zoneid = FindZoneArrayId(RUN_MAP, ZONE_START) ) != -1 )
     {
         TeleportEntity(client, g_zones[zoneid].spawnPos, g_zones[zoneid].spawnAng, NULL_VEC);
     }
@@ -88,8 +98,11 @@ public Action Command_Restart(int client, int args)
     else
     {
         MC_PrintToChat(client, "No zones for this map, can not respawn");
+        return Plugin_Handled;
     }
 
+    TF2_RegeneratePlayer(client);
+    
     return Plugin_Handled;
 }
 
@@ -108,6 +121,34 @@ public Action Command_TimerSwitch(int client, int args)
     {
         MC_PrintToChat(client, "Timer {red}Disabled");
     }
+
+    return Plugin_Handled;
+}
+
+public Action Command_SetStartPosition(int client, int args)
+{
+    if ( !(1 <= client <= MaxClients) ) return Plugin_Handled;
+
+    GetClientAbsOrigin(client, g_player[client].setStartPos);
+    GetClientEyeAngles(client, g_player[client].setStartAng);
+
+    g_player[client].setStartExists = true;
+
+    MC_PrintToChat(client, "Start positions has been {gold}Created{white}!\nType {cyan}!clearstart {white} to return default Start position!");
+
+    return Plugin_Handled;
+}
+
+public Action Command_ClearStartPosition(int client, int args)
+{
+    if ( !(1 <= client <= MaxClients) ) return Plugin_Handled;
+
+    g_player[client].setStartPos = NULL_VEC;
+    g_player[client].setStartAng = NULL_VEC;
+
+    g_player[client].setStartExists = false;
+
+    MC_PrintToChat(client, "Start positions has been {gold}Cleared{white}!");
 
     return Plugin_Handled;
 }

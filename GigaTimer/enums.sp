@@ -190,6 +190,10 @@ enum struct Player
     State state;
 
     Class currentClass;
+
+    float setStartPos[3];
+    float setStartAng[3];
+    bool setStartExists;
 }
 
 enum struct ChatTitles
