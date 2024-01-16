@@ -1313,7 +1313,7 @@ public void Thread_GetServerId(Database db, DBResultSet results, const char[] er
 void AuthPlayer(int client)
 {
     if ( !(1 <= client <= MaxClients) ) return;
-    if ( !IsClientInGame(client) && IsClientSourceTV(client) ) return;
+    if ( !IsClientInGame(client) || IsClientSourceTV(client) ) return;
 
     ClearPlayerData(client);
 
@@ -1359,8 +1359,6 @@ void JoinRankNotify(int client)
 
 public void Thread_GetPlayerInfo(Database db, DBResultSet results, const char[] error, any client)
 {
-    if ( !client ) return;
-
     if ( strlen(error) > 1 )
     {
         LogError(error);
