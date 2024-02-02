@@ -7,25 +7,9 @@
 #include <sdktools>
 #include <sdkhooks>
 #include <clients>
-
-#pragma newdecls required
-
-#pragma dynamic 131072
-
-#define MAX_COMMANDS 1000
-
-#define TIME_SIZE_DEF 15
-#define FORMAT_2DECI 0
-#define FORMAT_3DECI 1
-
-#define RUNS_LIMIT 100
-#define ZONES_LIMIT RUNS_LIMIT * 3
-
-#define NULL_VEC {0.0, 0.0, 0.0}
-
-#define RECORDS_LIMIT 10000
-
-#define BRUSH_MODEL "models/props/cs_office/vending_machine.mdl"
+#include <basecomm>
+#include <socket>
+#include <JetJump>
 
 Database g_hDatabase;
 
@@ -44,23 +28,25 @@ StageEnterTime g_stageEnterTimes[RECORDS_LIMIT];
 
 Player g_player[MAXPLAYERS+1];
 
-#include <GigaTimer\enums.sp>
-#include <GigaTimer\commands.sp>
+Lobby g_lobby[10];
+
+#include <JetJump\commands.sp>
+#include <JetJump\mapchooser.sp>
+#include <JetJump\LobbyServer.sp>
+#include <JetJump\LobbyClient.sp>
 
 public APLRes AskPluginLoad2(Handle myself, bool late, char[] error, int err_max)
 {
     if ( late )
     {
-        ConnectDatabase();
+        RequestFrame(ConnectDatabase);
 
-        InitMap();
+        RequestFrame(InitMap);
 
         for (int i = 0; i <= MaxClients; i++)
         {
-            AuthPlayer(i);
+            RequestFrame(AuthPlayer, i);
         }
-
-        RequestFrame( DrawPlayersHud );
     }
     
     return APLRes_Success;
@@ -68,22 +54,81 @@ public APLRes AskPluginLoad2(Handle myself, bool late, char[] error, int err_max
 
 public void OnAllPluginsLoaded()
 {
-    ConnectDatabase();
+    MC_AddColor("maincolor", 0x62DA9A);
+    MC_AddColor("accent", 0xB4F200);
+    MC_AddColor("background", 0xF36D91);
 
     // call InitMap() in this event  to avoid deleting newly created zone entites
     HookEvent("teamplay_round_start", OnRoundStart, EventHookMode_Post);
     HookEvent("player_spawn", OnPlayerSpawn, EventHookMode_Post);
+    HookEvent("player_connect_client", Event_Player_Connect, EventHookMode_Pre);
 
-    RegisterAllGigaCommands();
+    g_aMapList = new ArrayList( ByteCountToCells(PLATFORM_MAX_PATH) );
+    g_aMapTiersSolly = new ArrayList();
+    g_aMapTiersDemo = new ArrayList();
+    g_aNominateList = new ArrayList( ByteCountToCells(PLATFORM_MAX_PATH) );
+    g_aOldMaps = new ArrayList( ByteCountToCells(PLATFORM_MAX_PATH) );
 
-    RequestFrame( DrawPlayersHud );
+    ConnectDatabase();
+    // load maplist array
+    LoadMapList();
+    // cache the nominate menu so that it isn't being built every time player opens it
+    CreateNominateMenu();
+
+    RegisterAllJetJumpCommands();
+
+    DrawPlayersHud();
 }
 
 void OnRoundStart(Event event, const char[] name, bool dontBroadcast)
 {
     for (int i; i < ZONES_LIMIT; i++)
         if ( g_zones[i].exists )
-            CreateZoneEntity( i ); // Creating touch/leave hook 
+            CreateZoneEntity( i ); // Creating zone entity and touch/leave hook of them
+}
+
+stock void JetJump_PrintToChat(int client, const char[] message, any ...)
+{
+    MC_CheckTrie();
+
+    char prefix[] = "{background}[JetTimer] {white}";
+    char finalMessage[256];
+
+    FormatEx(finalMessage, sizeof(finalMessage), "%s%s", prefix, message );
+
+    char buffer[MAX_BUFFER_LENGTH];
+    char buffer2[MAX_BUFFER_LENGTH];
+
+    SetGlobalTransTarget(client);
+    Format(buffer, sizeof(buffer), "%s", finalMessage);
+    VFormat(buffer2, sizeof(buffer2), buffer, 3);
+
+    MC_ReplaceColorCodes(buffer2);
+    MC_SendMessage(client, buffer2);
+}
+
+stock void JetJump_PrintToChatAll(const char[] message, any ...)
+{
+    char prefix[] = "{background}[JetTimer] {white}";
+    char finalMessage[256];
+    FormatEx(finalMessage, sizeof(finalMessage), "%s%s", prefix, message );
+
+    MC_CheckTrie();
+
+    char buffer[MAX_BUFFER_LENGTH], buffer2[MAX_BUFFER_LENGTH];
+
+    for (int i = 1; i <= MaxClients; ++i) {
+        if (!IsClientInGame(i)) {
+            continue;
+        }
+
+        SetGlobalTransTarget(i);
+        Format(buffer, sizeof(buffer), "%s", finalMessage);
+        VFormat(buffer2, sizeof(buffer2), buffer, 2);
+
+        MC_ReplaceColorCodes(buffer2);
+        MC_SendMessage(i, buffer2);
+	}
 }
 
 void OnPlayerSpawn(Event event, const char[] name, bool dontBroadcast)
@@ -109,12 +154,56 @@ public void OnMapStart()
         PrecacheModel( BRUSH_MODEL, true );
     
     InitMap();
+
+    CreateTimer(2.0, RegeneratePlayersAmmo, _, TIMER_REPEAT | TIMER_FLAG_NO_MAPCHANGE);
+    CreateTimer( 1.0, Timer_OnSecond, _, TIMER_REPEAT | TIMER_FLAG_NO_MAPCHANGE );
 }
 
 public void OnMapEnd()
 {
     // cloar our zones firstly
     ClearZonesData();
+}
+
+public Action Event_Player_Connect(Event event, const char[] name, bool dontBroadcast)
+{
+    char strName[MAX_NAME_LENGTH];
+    event.GetString("name", strName, sizeof(strName));
+
+    MC_PrintToChatAll("{gold}%s {white}joins the server", strName);
+
+    event.BroadcastDisabled = true;
+
+    return Plugin_Continue;
+}
+
+public void OnClientPutInServer(int client)
+{
+    SDKHook(client, SDKHook_GetMaxHealth, OnGetMaxHealth);
+    SDKHook(client, SDKHook_OnTakeDamage, OnTakeDamage);
+
+    ClearPlayerData(client);
+}
+
+public Action OnGetMaxHealth(int client, int &maxhealth)
+{
+    if (client > 0 && client <= MaxClients)
+    {
+        if (TF2_GetPlayerClass(client) == TFClass_Soldier)
+        {
+            maxhealth = 900;
+        }
+        return Plugin_Changed;
+    }
+    return Plugin_Continue;
+}
+
+public Action OnTakeDamage(int client, int &attacker, int &inflictor, float &damage, int &damagetype)
+{
+    if (TF2_GetPlayerClass(client) == TFClass_Soldier && damagetype & DMG_FALL)
+        return Plugin_Handled;
+
+    return Plugin_Continue;
 }
 
 public void OnClientPostAdminCheck(int client)
@@ -124,8 +213,42 @@ public void OnClientPostAdminCheck(int client)
     AuthPlayer(client);
 }
 
+public void OnClientDisconnect(int client)
+{
+    MC_PrintToChatAll("{gold}%s {white}has been disconnected", g_player[client].name);
+    ClearPlayerData(client);
+}
+
+Action RegeneratePlayersAmmo(Handle timer)
+{
+    for (int client = 1; client <= MaxClients; client++)
+    {
+        if ( !IsClientInGame(client)
+            || !IsClientConnected(client)
+            || IsClientSourceTV(client)
+            || !IsPlayerAlive(client)
+            || g_player[client].currentClass == CLASS_INVALID ) continue;
+
+        if ( g_run[client].regenAmmo == g_player[client].currentClass || g_run[client].regenAmmo == CLASS_BOTH )
+            TF2_RegeneratePlayer(client);
+    }
+    return Plugin_Continue;
+}
+
 void InitMap()
 {
+    g_bMapVoteFinished = false;
+    g_bMapVoteStarted = false;
+	
+    g_aNominateList.Clear();
+
+    for ( int i = 1; i <= MaxClients; i++ )
+    {
+        g_cNominatedMap[i][0] = '\0';
+    }
+
+    ClearRTV();
+
     GetCurrentMap(g_currentMap.name, sizeof(MapInfo::name));
 
     char query[256];
@@ -171,7 +294,7 @@ void InitZones()
                                     COALESCE((SELECT soldier_completions FROM map_info WHERE map_id = map_zones.map_id AND run_type = map_zones.run_type AND run_id = map_zones.run_id), 0), \
                                     COALESCE((SELECT demoman_completions FROM map_info WHERE map_id = map_zones.map_id AND run_type = map_zones.run_type AND run_id = map_zones.run_id), 0), \
                                     COALESCE((SELECT regen_ammo FROM map_info WHERE map_id = map_zones.map_id AND run_type = map_zones.run_type AND run_id = map_zones.run_id), -1) \
-                                    FROM map_zones WHERE map_id = %i", g_currentMap.id );
+                                    FROM map_zones WHERE map_id = %i ORDER BY run_id ASC", g_currentMap.id );
 
     g_hDatabase.Query(Thread_GetMapZones, query);
 }
@@ -245,7 +368,7 @@ public void Thread_GetMapZones(Database db, DBResultSet results, const char[] er
     if ( zones_count > 0 )
     {
         PrintToServer("Loaded %i zones! for %s", zones_count, g_currentMap.name);
-        MC_PrintToChatAll("Loaded {gold}%i {white}zones!", zones_count);
+        JetJump_PrintToChatAll("Loaded {maincolor}%i {white}zones!", zones_count);
     }
     else
     {
@@ -422,9 +545,9 @@ public void Event_Touch_Zone( int trigger, int client )
                     int prefix = currentTime >= bestTime ? '+' : '-';
                     
                     FormatSeconds(currentTime > bestTime ? currentTime - bestTime : bestTime - currentTime, comparisonTimeText);
-                    FormatEx(comparisonText, sizeof(comparisonText), "{white}({%s}WR %c%s{white})", prefix == '+' ? "lightskyblue" : "red", prefix, comparisonTimeText);
+                    FormatEx(comparisonText, sizeof(comparisonText), "{white}({%s}WR %c%s{white})", prefix == '+' ? "maincolor" : "red", prefix, comparisonTimeText);
                 }
-                MC_PrintToChat(client, "Entered {blue}%s {white}with time: {green}%s %s", g_zones[id].runInfo.runName, currentTimeText, comparisonText);
+                JetJump_PrintToChat(client, "Entered {maincolor}%s {white}with time: {accent}%s %s", g_zones[id].runInfo.runName, currentTimeText, comparisonText);
 
                 g_run[client].stageEnterTime[g_zones[id].runInfo.index] = currentTime;
                 g_run[client].linearMode = true;
@@ -435,13 +558,13 @@ public void Event_Touch_Zone( int trigger, int client )
                     && g_run[client].type == RUN_STAGE
                     && g_run[client].linearMode )
             {
-                MC_PrintToChat(client, "{red}ERROR {white}| Your run was {red}closed{white}, becouse you not finished:")
+                MC_PrintToChat(client, "{red}ERROR {white}| Your run was {accent}CLOSED{white}, becouse you not finished:")
                 
                 int lastUnfinishedRun = ( g_player[client].state == STATE_RUNNING ) ? g_run[client].info.index : g_run[client].info.index + 1;
 
                 for (int i = g_zones[id].runInfo.index - 1; i >= lastUnfinishedRun; i--)
                 {
-                    MC_PrintToChat(client, "{cyan}Stage {gold}%i", i);
+                    JetJump_PrintToChat(client, "Stage {maincolor}%i", i);
                 }
 
                 g_run[client].linearMode = false;
@@ -467,6 +590,7 @@ public void Event_Touch_Zone( int trigger, int client )
 
         g_run[client].type = g_zones[id].runType;
         g_run[client].info = g_zones[id].runInfo;
+        g_run[client].regenAmmo = g_zones[id].regen_ammo;
 
         g_player[client].currentZone = g_zones[id];
         g_player[client].state = STATE_START;
@@ -492,7 +616,7 @@ public void Event_Touch_Zone( int trigger, int client )
 
 public void Event_EndTouch_Zone( int trigger, int client )
 {
-    if ( client < 1 || client > MaxClients || !IsClientInGame(client) || !IsClientConnected(client) ) return;
+    if ( client < 1 || client > MaxClients || !IsClientInGame(client) || !IsClientConnected(client) || g_player[client].state == STATE_INVALID ) return;
 
     int id = GetTriggerIndex( trigger );
 
@@ -551,17 +675,17 @@ void NotifyRecordInChat(int client, Run run)
             int prefix = run.finishTime >= run.worldRecord.time ? '+' : '-';
                         
             FormatSeconds(run.finishTime >= run.worldRecord.time ? run.finishTime - run.worldRecord.time : run.worldRecord.time - run.finishTime, comparisonTimeText);
-            FormatEx(comparisonText, sizeof(comparisonText), "{white}({%s}WR %c%s{white})", prefix == '+' ? "lightskyblue" : "red", prefix, comparisonTimeText);
+            FormatEx(comparisonText, sizeof(comparisonText), "{white}({%s}WR %c%s{white})", prefix == '+' ? "maincolor" : "red", prefix, comparisonTimeText);
 
             if ( prIndex != -1 && g_run[client].personalRecord.time > run.finishTime )
             {
                 FormatSeconds(run.personalRecord.time - run.finishTime, comparisonTimeText);
-                FormatEx(comparisonText, sizeof(comparisonText), "%s | improved by {green}%s", comparisonText, comparisonTimeText);
+                FormatEx(comparisonText, sizeof(comparisonText), "%s | improved by {accent}%s", comparisonText, comparisonTimeText);
             }
         }
 
         FormatSeconds(run.finishTime, time);
-        MC_PrintToChatAll( "{yellow}%N {white}finished the {cyan}%s{white}: {hotpink}%s %s", client, run.info.runName, time, comparisonText );
+        JetJump_PrintToChatAll( "{gold}%N {white}finished the {maincolor}%s{white}: {accent}%s %s", client, run.info.runName, time, comparisonText );
 
         if ( prIndex == -1 || run.finishTime < g_records[prIndex].time )
             SaveRecord(g_player[client], run);
@@ -575,17 +699,17 @@ void NotifyRecordInChat(int client, Run run)
             int prefix = run.stageFinishTime >= run.worldRecord.time ? '+' : '-';
                         
             FormatSeconds(run.stageFinishTime >= run.worldRecord.time ? run.stageFinishTime - run.worldRecord.time : run.worldRecord.time - run.stageFinishTime, comparisonTimeText);
-            FormatEx(comparisonText, sizeof(comparisonText), "{white}({%s}WR %c%s{white})", prefix == '+' ? "lightskyblue" : "red", prefix, comparisonTimeText);
+            FormatEx(comparisonText, sizeof(comparisonText), "{white}({%s}WR %c%s{white})", prefix == '+' ? "maincolor" : "red", prefix, comparisonTimeText);
 
             if ( prIndex != -1 && g_run[client].personalRecord.time > run.stageFinishTime )
             {
                 FormatSeconds(run.personalRecord.time - run.stageFinishTime, comparisonTimeText);
-                FormatEx(comparisonText, sizeof(comparisonText), "%s | improved by {green}%s", comparisonText, comparisonTimeText);
+                FormatEx(comparisonText, sizeof(comparisonText), "%s | improved by {accent}%s", comparisonText, comparisonTimeText);
             }
         }
 
         FormatSeconds(run.stageFinishTime, time);
-        MC_PrintToChatAll( "{gold}%N {white}finished the {cyan}%s{white}: {hotpink}%s %s", client, run.info.runName, time, comparisonText );
+        JetJump_PrintToChatAll( "{gold}%N {white}finished the {maincolor}%s{white}: {accent}%s %s", client, run.info.runName, time, comparisonText );
         
         if ( prIndex == -1 || run.stageFinishTime < g_records[prIndex].time )
             SaveRecord(g_player[client], run);
@@ -663,13 +787,11 @@ void SaveRecord(Player player, Run run)
         {
             if (g_player[i].id == player.id)
             {
-                MC_PrintToChat(i, "Your run dont {red}saved{white}! No tiers to calculate points.");
+                JetJump_PrintToChat(i, "Your run dont {red}SAVED{white}! No tiers to calculate points.");
                 return;
             }
         }
     }
-
-    
 }
 
 void DrawPlayersHud()
@@ -703,7 +825,7 @@ void DrawPlayersHud()
             player = GetCurrentSpectatingClient(client);
             
             // oh no, you dont spectate at any players
-            if ( player == -1 ) continue;
+            if ( player == -1 ) player = client;
         }
 
         if ( g_player[player].currentClass == CLASS_INVALID ) continue;
@@ -738,16 +860,6 @@ void DrawPlayersHud()
             state == STATE_START ? "Start" : "Finish",
             type);
 
-            if (whenDrawHud[client] < engineTime)
-            {
-                shouldDrawHud[client] = true;
-                whenDrawHud[client] = engineTime + 0.5;
-            }
-            else
-            {
-                shouldDrawHud[client] = false;
-            }
-
             if ( run.type == RUN_STAGE )
             {
                 if ( run.linearMode &&
@@ -766,8 +878,6 @@ void DrawPlayersHud()
                     run.info.runName,
                     state == STATE_START ? "Start" : "Finish",
                     type);
-
-                    shouldDrawHud[client] = true;
                 }
             }
         }
@@ -783,11 +893,29 @@ void DrawPlayersHud()
             if (!g_player[player].isTimerOn)
                 FormatEx(currentTimeText, sizeof(currentTimeText), "[Timer OFF]");
 
-            FormatEx(hud, sizeof(hud), "%s\n \n(%s)\n \n%s (tier %i)", currentTimeText, run.info.runName, type, run.info.tier[g_player[player].currentClass]);
-
-            shouldDrawHud[client] = true;
+            FormatEx(hud, sizeof(hud), "%s\n \n(%s)\n \n%s", currentTimeText, run.info.runName, type);
         }
         else if ( state == STATE_INVALID )
+        {
+            FormatEx(hud, sizeof(hud), "[Enter the Start Zone]");
+        }
+
+        if (shouldDrawHud[client])
+        {
+            PrintHintTextCenter( client, hud );
+
+            if ( state != STATE_INVALID )
+            {
+                PrintHintTextRightSide(client, player);
+            }
+        }
+
+        if ( state == STATE_RUNNING
+            || ((state == STATE_START || state == STATE_END) && run.type == RUN_STAGE && run.info.index > 1 && run.linearMode ) )
+        {
+            shouldDrawHud[client] = true;
+        }
+        else
         {
             if (whenDrawHud[client] < engineTime)
             {
@@ -798,25 +926,6 @@ void DrawPlayersHud()
             {
                 shouldDrawHud[client] = false;
             }
-
-            FormatEx(hud, sizeof(hud), "[Enter the Start Zone]");
-        }
-
-
-        if (shouldDrawHud[client])
-        {
-            PrintHintText( client, hud );
-            shouldDrawHud[client] = false;
-
-            if ( state != STATE_INVALID )
-            {
-                FormatSeconds(g_run[player].personalRecord.time, currentTimeText, FORMAT_2DECI);
-                FormatEx(hud, sizeof(hud), "Personal Record: %s", currentTimeText);
-
-                FormatSeconds(g_run[player].worldRecord.time, currentTimeText, FORMAT_2DECI);
-                FormatEx(hud, sizeof(hud), "%s\n\nWorld Record: %s (%s)", hud, currentTimeText, g_run[player].worldRecord.player_name);
-                PrintHintTextRightSide(client, hud);
-            }
         }
     }
 
@@ -824,32 +933,119 @@ void DrawPlayersHud()
     RequestFrame( DrawPlayersHud );
 }
 
-stock bool PrintHintTextRightSide(int client, const char[] format, any ...)
+stock void PrintHintTextCenter(int client, const char[] buffer)
 {
-	Handle userMessage = StartMessageOne("KeyHintText", client);
+    Handle msg = StartMessageOne("HintText", client, USERMSG_BLOCKHOOKS);
 
-	if (userMessage == INVALID_HANDLE) {
-		return false;
+    if (msg != INVALID_HANDLE)
+	{
+        BfWriteString(msg, buffer);
+        EndMessage();
+	}
+}
+
+stock void PrintHintTextRightSide(int client, int target_player)
+{
+    if ( IsClientObserver(client) && GetEntPropEnt(client, Prop_Send, "m_hObserverTarget") == -1 ) return;
+
+    char hud[254];
+
+    char remaining[64];
+    char TimeText[TIME_SIZE_DEF];
+
+    int timeleft; GetMapTimeLeft(timeleft);
+
+    if ( timeleft >= 60 )
+	{
+		int mins = timeleft / 60;
+		FormatEx(remaining, sizeof(remaining), "%i minutes left", mins);
+	}
+	else if ( timeleft < 60 && timeleft > 0 )
+	{
+		FormatEx(remaining, sizeof(remaining), "%i seconds left", timeleft);
+	}
+	else if ( timeleft <= 0 )
+	{
+		FormatEx(remaining, sizeof(remaining), "Map ending...");
 	}
 
-	char buffer[254];
+    FormatEx(hud, sizeof(hud), "%s\n\n", remaining);
+    
+    if ( g_run[target_player].personalRecord.exists )
+    {
+        FormatSeconds(g_run[target_player].personalRecord.time, TimeText, FORMAT_2DECI);
 
-	SetGlobalTransTarget(client);
-	VFormat(buffer, sizeof(buffer), format, 3);
+        if ( g_run[target_player].personalRecord.player_id == g_run[target_player].worldRecord.player_id )
+        {
+            FormatEx(hud, sizeof(hud), "%sPersonal Record:\n%s\n\n", hud, TimeText);
+        }
+        else
+        {
+            char PrWrCompare[TIME_SIZE_DEF];
+            FormatSeconds(g_run[target_player].personalRecord.time - g_run[target_player].worldRecord.time, PrWrCompare, FORMAT_2DECI);
+            FormatEx(hud, sizeof(hud), "%sPersonal Record:\n%s (+%s)\n\n", hud, TimeText, PrWrCompare);
+        }
+    }
+    else
+    {
+        FormatEx(hud, sizeof(hud), "%sPersonal Record:\n-\n\n", hud);
+    }
 
-	if (GetFeatureStatus(FeatureType_Native, "GetUserMessageType") == FeatureStatus_Available
-		&& GetUserMessageType() == UM_Protobuf) {
 
-		PbAddString(userMessage, "hints", buffer);
+    if ( g_run[target_player].worldRecord.exists )
+    {
+        FormatSeconds(g_run[target_player].worldRecord.time, TimeText, FORMAT_2DECI);
+        FormatEx(hud, sizeof(hud), "%sWorld Record:\n%s (%s)\n\n", hud, TimeText, g_run[target_player].worldRecord.player_name);
+    }
+    else
+    {
+        FormatEx(hud, sizeof(hud), "%sWorld Record:\n-\n\n", hud);
+    }
+
+    char strSpectatorsName[256];
+    int Spec_Count;
+    for (int i = 1; i <= MaxClients; i++)
+    {
+		if (!IsClientInGame(i) || !IsClientObserver(i))
+				continue;
+				
+		int iSpecMode = GetEntProp(i, Prop_Send, "m_iObserverMode");
+			
+			// The client isn't spectating any one person, so ignore them.
+		if (iSpecMode != 4 && iSpecMode != 5)
+				continue;
+			
+			// Find out who the client is spectating.
+		int iTarget = GetEntPropEnt(i, Prop_Send, "m_hObserverTarget");
+			
+			// Are they spectating our player?
+		if (iTarget == target_player)
+		{
+            char name[32];
+            GetClientName(i, name, sizeof(name));
+
+            Spec_Count++;
+            if (Spec_Count <= 5)
+                FormatEx(strSpectatorsName, sizeof(strSpectatorsName), "%s\n%s", strSpectatorsName, name);
+		}
 	}
-	else {
-		BfWriteByte(userMessage, 1);
-		BfWriteString(userMessage, buffer);
-	}
 
-	EndMessage();
+    if ( Spec_Count <= 5 )
+        FormatEx(hud, sizeof(hud), "%sSpectators (%i)%s", hud, Spec_Count, strSpectatorsName);
+    else
+        FormatEx(hud, sizeof(hud), "%sSpectators (%i)%s\n(+%i)", hud, Spec_Count, strSpectatorsName, Spec_Count - 5);
 
-	return true;
+    StrCat(hud, sizeof(hud), "\n\n");
+
+    Handle userMessage = StartMessageOne("KeyHintText", client);
+
+    if (userMessage != INVALID_HANDLE)
+    {
+        BfWriteByte(userMessage, 1);
+        BfWriteString(userMessage, hud);
+
+        EndMessage();
+    }
 }
 
 stock int GetCurrentSpectatingClient(int client)
@@ -866,6 +1062,65 @@ stock int GetCurrentSpectatingClient(int client)
     }
     // Not found :(.
     return -1;
+}
+
+public Action OnClientSayCommand( int client, const char[] szCommand, const char[] text )
+{
+    if ( !client || BaseComm_IsClientGagged( client ) ) return Plugin_Continue;
+
+    char sCodes[8][] = {"\x01", "\x02", "\x03", "\x04", "\x05", "\x06", "\x07", "\x08"};
+
+    char live[10];
+    char msg[200];
+    char alltext[300];
+    int rank;
+    char class[1];
+
+    FormatEx(msg, sizeof(msg), "%s", text);
+    TrimString(msg);
+
+    for ( int i = 0; i < 8; i++)
+        ReplaceString(msg, sizeof(msg), sCodes[i], "");
+
+    if ( !IsPlayerAlive(client) )
+        FormatEx(live, sizeof(live), "* ");
+    else
+        FormatEx(live, sizeof(live), "");
+
+    if (g_player[client].soldierRank <= 0)
+    {
+        class[0] = 'D';
+        rank = g_player[client].demomanRank;
+    }
+    else if (g_player[client].demomanRank <= 0)
+    {
+        class[0] = 'S';
+        rank = g_player[client].soldierRank;
+    }
+    else
+    {
+        if (g_player[client].soldierRank <= g_player[client].demomanRank)
+        {
+            class[0] = 'S';
+            rank = g_player[client].soldierRank;
+        }
+        else
+        {
+            class[0] = 'D';
+            rank = g_player[client].demomanRank;
+        }
+    }
+
+    if ( rank > 0 )
+        FormatEx( alltext, sizeof(alltext), "%s{red}[{white}%s{red}|{orange}Rank %i{red}] {cyan}%s{white}: %s", live, class, rank, g_player[client].name, msg );
+    else
+        FormatEx( alltext, sizeof(alltext), "%s{red}[{grey}Unranked{red}] {grey}%s{white}: %s", live, g_player[client].name, msg );
+
+    for (int i = 1; i <= MaxClients; i++)
+        if (IsClientConnected(i) && IsClientInGame(i))
+            MC_PrintToChat(i, alltext);
+    
+    return Plugin_Handled;
 }
 
 // Format seconds and make them look nice.
@@ -931,6 +1186,123 @@ stock void FormatSeconds( float flSeconds, char szTarget[TIME_SIZE_DEF], int fFl
     return;
 }
 
+stock void DrawZone(int client, Zone zoneToDraw)
+{
+    enum
+    {
+        BEAM_POS_BOTTOM1,
+        BEAM_POS_BOTTOM2,
+        BEAM_POS_BOTTOM3,
+        BEAM_POS_BOTTOM4,
+        BEAM_POS_TOP1,
+        BEAM_POS_TOP2,
+        BEAM_POS_TOP3,
+        BEAM_POS_TOP4,
+        
+        BEAM_POINTS
+    }
+
+    #define ZONE_WIDTH 1.5
+    #define ZONE_BEAM_ALIVE 25.0
+
+    int color[4] = {255, 215, 0, 255};
+
+    int laser = PrecacheModel("sprites/laserbeam.vmt");
+
+    float point[BEAM_POINTS][3];
+    float ZoneBottomPoint[4][3];
+    float ZoneTopPoint[4][3];
+
+    float vecTemp[3];
+
+    int zones_drawed;
+
+    Zone zone;
+
+    for (int i; i < ZONES_LIMIT; i++)
+    {
+        if ( !g_zones[i].exists ) continue;
+
+        if ( g_zones[i].zoneType != zoneToDraw.zoneType
+            || g_zones[i].runType != zoneToDraw.runType
+            || g_zones[i].runInfo.index != zoneToDraw.runInfo.index ) continue;
+
+        zone = g_zones[i];
+
+        vecTemp[0] = zone.cordMin[0] + ZONE_WIDTH;
+        vecTemp[1] = zone.cordMin[1] + ZONE_WIDTH;
+        vecTemp[2] = zone.cordMin[2] + ZONE_WIDTH;
+        ArrayCopy( vecTemp, point[BEAM_POS_BOTTOM1], 3 );
+
+        vecTemp[0] = zone.cordMax[0] - ZONE_WIDTH;
+        vecTemp[1] = zone.cordMin[1] + ZONE_WIDTH;
+        vecTemp[2] = zone.cordMin[2] + ZONE_WIDTH;
+        ArrayCopy( vecTemp, point[BEAM_POS_BOTTOM2], 3 );
+
+        vecTemp[0] = zone.cordMax[0] - ZONE_WIDTH;
+        vecTemp[1] = zone.cordMax[1] - ZONE_WIDTH;
+        vecTemp[2] = zone.cordMin[2] + ZONE_WIDTH;
+        ArrayCopy( vecTemp, point[BEAM_POS_BOTTOM3], 3 );
+
+        vecTemp[0] = zone.cordMin[0] + ZONE_WIDTH;
+        vecTemp[1] = zone.cordMax[1] - ZONE_WIDTH;
+        vecTemp[2] = zone.cordMin[2] + ZONE_WIDTH;
+        ArrayCopy( vecTemp, point[BEAM_POS_BOTTOM4], 3 );
+
+        // Top
+        vecTemp[0] = zone.cordMin[0] + ZONE_WIDTH;
+        vecTemp[1] = zone.cordMin[1] + ZONE_WIDTH;
+        vecTemp[2] = zone.cordMax[2] - ZONE_WIDTH;
+        ArrayCopy( vecTemp, point[BEAM_POS_TOP1], 3 );
+
+        vecTemp[0] = zone.cordMax[0] - ZONE_WIDTH;
+        vecTemp[1] = zone.cordMin[1] + ZONE_WIDTH;
+        vecTemp[2] = zone.cordMax[2] - ZONE_WIDTH;
+        ArrayCopy( vecTemp, point[BEAM_POS_TOP2], 3 );
+
+        vecTemp[0] = zone.cordMax[0] - ZONE_WIDTH;
+        vecTemp[1] = zone.cordMax[1] - ZONE_WIDTH;
+        vecTemp[2] = zone.cordMax[2] - ZONE_WIDTH;
+        ArrayCopy( vecTemp, point[BEAM_POS_TOP3], 3 );
+
+        vecTemp[0] = zone.cordMin[0] + ZONE_WIDTH;
+        vecTemp[1] = zone.cordMax[1] - ZONE_WIDTH;
+        vecTemp[2] = zone.cordMax[2] - ZONE_WIDTH;
+        ArrayCopy( vecTemp, point[BEAM_POS_TOP4], 3 );
+
+        // Bottom
+        ArrayCopy( point[BEAM_POS_BOTTOM1], ZoneBottomPoint[0], 3 );
+        ArrayCopy( point[BEAM_POS_BOTTOM2], ZoneBottomPoint[1], 3 );
+        ArrayCopy( point[BEAM_POS_BOTTOM3], ZoneBottomPoint[2], 3 );
+        ArrayCopy( point[BEAM_POS_BOTTOM4], ZoneBottomPoint[3], 3 );
+        
+        // Top
+        ArrayCopy( point[BEAM_POS_TOP1], ZoneTopPoint[0], 3 );
+        ArrayCopy( point[BEAM_POS_TOP2], ZoneTopPoint[1], 3 );
+        ArrayCopy( point[BEAM_POS_TOP3], ZoneTopPoint[2], 3 );
+        ArrayCopy( point[BEAM_POS_TOP4], ZoneTopPoint[3], 3 );
+
+        for (int z = 0; z < 4; z++)
+        {
+            // Bottom
+            TE_SetupBeamPoints( ZoneBottomPoint[z], ZoneBottomPoint[(z == 3) ? 0 : z+1], laser, 0, 0, 0, ZONE_BEAM_ALIVE, ZONE_WIDTH, ZONE_WIDTH, 0, 0.0, color, 0 );
+            TE_SendToClient(client);
+
+            // Top
+            TE_SetupBeamPoints( ZoneTopPoint[z], ZoneTopPoint[(z == 3) ? 0 : z+1], laser, 0, 0, 0, ZONE_BEAM_ALIVE, ZONE_WIDTH, ZONE_WIDTH, 0, 0.0, color, 0 );
+            TE_SendToClient(client);
+
+            // From bottom to top.
+            TE_SetupBeamPoints( ZoneBottomPoint[z], ZoneTopPoint[z], laser, 0, 0, 0, 25.0, ZONE_WIDTH, ZONE_WIDTH, 0, 0.0, color, 0 );
+            TE_SendToClient(client);
+        }
+        zones_drawed++;
+    }
+
+    if ( zones_drawed > 0 )
+        JetJump_PrintToChat(client, "Drawed {gold}%i {white}zone(s) for {cyan}%s%s", zones_drawed, zoneToDraw.runInfo.runName, zoneToDraw.zoneType == ZONE_START ? " Start" : " End" );
+}
+
 void ClearPlayerData(int client)
 {
     if ( !(1 <= client <= MaxClients) ) return
@@ -938,6 +1310,9 @@ void ClearPlayerData(int client)
     Player emptyPlayer
 
     g_player[client] = emptyPlayer
+    g_player[client].state = STATE_INVALID;
+    g_player[client].isTimerOn = true;
+    g_player[client].currentZone.arrayId = -1;
 }
 
 void ClearZonesData()
@@ -1059,14 +1434,14 @@ public Class GetPlayerClass(int client)
 	Class class;
 	if (IsClientInGame(client) && IsPlayerAlive(client))
 	{
-
 		TFClassType playerClass = TF2_GetPlayerClass(client);
 
 		switch(playerClass)
 		{
 			case TFClass_Soldier  : return CLASS_SOLDIER;
 			case TFClass_DemoMan  : return CLASS_DEMOMAN;
-			default: return CLASS_INVALID;
+			default:
+                return CLASS_INVALID;
 		}
 	}
 	return class;
@@ -1210,6 +1585,11 @@ public void Thread_GetUpdatedPoints (Database db, any data, int numQueries, DBRe
 
     int rank, prevRank, completions;
 
+    Transaction t = new Transaction();
+    char query[255];
+
+    bool mustRequeryRankSurely;
+
     while ( results[1].FetchRow() )
     {
         player_id = results[1].FetchInt(0);
@@ -1228,68 +1608,98 @@ public void Thread_GetUpdatedPoints (Database db, any data, int numQueries, DBRe
 
         prevRank = prIndex != -1 ? g_records[prIndex].rank : 0;
 
+        bool mustRequeryRank;
+
         for (int i = 1; i <= MaxClients; i++)
         {
-            if ( g_player[i].id == player_id )
+            if ( g_player[i].id == player_id && IsClientInGame(i) )
             {
                 if ( points != prevPoints )
-                    MC_PrintToChat(i, "You gain {%s}%.1f {white}%s points for {orange}%s", (points - prevPoints) > 0.0 ? "cyan" : "red", points - prevPoints, class == CLASS_SOLDIER ? "Soldier" : "Demoman",
+                {
+                    JetJump_PrintToChat(i, "You gain %s%.1f {white}%s points for {maincolor}%s", (points - prevPoints) > 0.0 ? "{accent}" : "{red}", points - prevPoints, class == CLASS_SOLDIER ? "Soldier" : "Demoman",
                                     FindZoneArrayId(run_type, ZONE_START, run_id) != -1 ? g_zones[FindZoneArrayId(run_type, ZONE_START, run_id)].runInfo.runName : "Map" );
-
+                    mustRequeryRank = true;
+                }
                 if ( rank != prevRank )
                 {
                     if ( prevRank == 0 )
                     {
-                        MC_PrintToChat(i, "Now rank: {cyan}%i/%i {white}on {orange}%s {white}(%s)", rank, completions, class == CLASS_SOLDIER ? "Soldier" : "Demoman",
+                        JetJump_PrintToChat(i, "Now rank: {accent}%i/%i {white}on {maincolor}%s {white}(%s)", rank, completions, class == CLASS_SOLDIER ? "Soldier" : "Demoman",
                                         FindZoneArrayId(run_type, ZONE_START, run_id) != -1 ? g_zones[FindZoneArrayId(run_type, ZONE_START, run_id)].runInfo.runName : "Map" );
                     }
                     else
                     {
-                        MC_PrintToChat(i, "Now rank: {cyan}%i/%i {white}(%s%i{white}) on {orange}%s {white}(%s)", rank, completions, rank < prevRank ? "{cyan}" : "{red}+", rank - prevRank, class == CLASS_SOLDIER ? "Soldier" : "Demoman",
+                        JetJump_PrintToChat(i, "Now rank: {accent}%i/%i {white}(%s%i{white}) on {maincolor}%s {white}(%s)", rank, completions, rank < prevRank ? "{accent}" : "{red}+", rank - prevRank, class == CLASS_SOLDIER ? "Soldier" : "Demoman",
                                         FindZoneArrayId(run_type, ZONE_START, run_id) != -1 ? g_zones[FindZoneArrayId(run_type, ZONE_START, run_id)].runInfo.runName : "Map" );
                     }
+                    mustRequeryRank = true;
+                }
+
+                if ( mustRequeryRank )
+                {
+                    FormatEx( query, sizeof(query), "SELECT soldier_rank, demoman_rank FROM players WHERE id = %i", g_player[i].id );
+                    t.AddQuery(query, i);
+
+                    mustRequeryRankSurely = true;
                 }
             }
         }
     }
+    
     InitRecords();
+
+    if ( mustRequeryRankSurely )
+        g_hDatabase.Execute(t, Thread_GetPlayersRanks);
 }
+
+void Thread_GetPlayersRanks(Database db, any data, int numQueries, DBResultSet[] results, any[] queryData)
+{
+    for (int i; i < numQueries; i++)
+    {
+        if (results[i].FetchRow())
+        {
+            g_player[queryData[i]].soldierRank = results[i].FetchInt(0);
+            g_player[queryData[i]].demomanRank = results[i].FetchInt(1);
+        }
+    }
+}
+
 
 void AuthServer()
 {
-    ServerInfo srv;
     int iPublicIP[4];
 
-    // if we cant get public ip --> stop plugin
+    // if we cant get public ip --> try until we get
     if (!SteamWorks_IsConnected() || !SteamWorks_GetPublicIP(iPublicIP))
-        SetFailState("Appears like we had an error on getting the Public Server IP address.");
-
-    if (iPublicIP[0] == 0)
     {
-        AuthServer();
+        RequestFrame(AuthServer);
         return;
     }
 
-    Format(srv.ip, sizeof(ServerInfo::ip), "%d.%d.%d.%d", iPublicIP[0], iPublicIP[1], iPublicIP[2], iPublicIP[3]);
-    srv.port = GetConVarInt(FindConVar("hostport"));
-    srv.maxPlayers = 10;
-    GetConVarString(FindConVar("hostname"), srv.name, sizeof(ServerInfo::name));
-    srv.isOnline = true;
+    if (iPublicIP[0] == 0)
+    {
+        RequestFrame(AuthServer);
+        return;
+    }
 
-    g_server = srv;
+    Format(g_server.ip, sizeof(ServerInfo::ip), "%d.%d.%d.%d", iPublicIP[0], iPublicIP[1], iPublicIP[2], iPublicIP[3]);
+    g_server.port = GetConVarInt(FindConVar("hostport"));
+    g_server.maxPlayers = 10;
+    GetConVarString(FindConVar("hostname"), g_server.name, sizeof(ServerInfo::name));
+    g_server.isOnline = true;
 
     char query[256];
     FormatEx(query, sizeof(query), "INSERT INTO servers (name, ip, max_players, isOnline) VALUES('%s', '%s:%i', %i, 1) \
                                     ON DUPLICATE KEY UPDATE name = '%s', max_players = %i, isOnline = 1",
-                                    srv.name,
-                                    srv.ip, srv.port,
-                                    srv.maxPlayers,
-                                    srv.name,
-                                    srv.maxPlayers);
+                                    g_server.name,
+                                    g_server.ip, g_server.port,
+                                    g_server.maxPlayers,
+                                    g_server.name,
+                                    g_server.maxPlayers);
 
     g_hDatabase.Query(Thread_Empty, query);
 
-    FormatEx(query, sizeof(query), "SELECT id FROM servers WHERE ip = '%s:%i'", srv.ip, srv.port);
+    FormatEx(query, sizeof(query), "SELECT id FROM servers WHERE ip = '%s:%i'", g_server.ip, g_server.port);
 
     g_hDatabase.Query(Thread_GetServerId, query);
 }
@@ -1306,29 +1716,21 @@ public void Thread_GetServerId(Database db, DBResultSet results, const char[] er
     {
         SetFailState("Can not get server id! Plugin disabled.");
     }
-
-    return;
 }
 
 void AuthPlayer(int client)
 {
     if ( !(1 <= client <= MaxClients) ) return;
     if ( !IsClientInGame(client) || IsClientSourceTV(client) ) return;
+    
+    char query[300];
 
-    ClearPlayerData(client);
-
-    char query[256];
-
-    GetClientAuthId(client, AuthId_SteamID64, g_player[client].steamid, Player::steamid);
-
-    g_player[client].state = STATE_INVALID;
-    g_player[client].isTimerOn = true;
-    g_player[client].currentZone.arrayId = -1;
+    g_player[client].clientIndex = client;
+    GetClientAuthId(client, AuthId_Steam2, g_player[client].steamid, sizeof(Player::steamid));
+    GetClientAuthId(client, AuthId_SteamID64, g_player[client].steamid64, sizeof(Player::steamid64));
 
     FormatEx( query, sizeof(query), "SELECT id, settingsFlag, soldier_points, demoman_points, soldier_rank, demoman_rank, isAdmin FROM players WHERE steamid = '%s'", g_player[client].steamid );
     g_hDatabase.Query(Thread_GetPlayerInfo, query, client);
-
-    return;
 }
 
 void JoinRankNotify(int client)
@@ -1354,10 +1756,10 @@ void JoinRankNotify(int client)
         FormatEx(info, sizeof(info), "Unranked");
     }
 
-    MC_PrintToChatAll("{orange}%s {blue}(%s) {white}connected from {green}%s", g_player[client].name, info, g_player[client].country);
+    MC_PrintToChatAll("{gold}%s {white}({maincolor}%s{white}) {white}connected from {accent}%s", g_player[client].name, info, g_player[client].country);
 }
 
-public void Thread_GetPlayerInfo(Database db, DBResultSet results, const char[] error, any client)
+void Thread_GetPlayerInfo(Database db, DBResultSet results, const char[] error, any client)
 {
     if ( strlen(error) > 1 )
     {
@@ -1389,13 +1791,15 @@ public void Thread_GetPlayerInfo(Database db, DBResultSet results, const char[] 
 
         g_player[client].isAdmin = view_as<bool>(results.FetchInt(6));
 
+        g_player[client].currentLobby.lobbyConnectionsSocket = new ArrayList();
+
         Transaction transaction = new Transaction();
 
         char query[256];
         FormatEx(query, sizeof(query), "UPDATE players SET online_on_server_id = %i, last_connection = NOW() WHERE id = %i;", g_server.id, g_player[client].id);
         transaction.AddQuery(query);
 
-        FormatEx(query, sizeof(query), "UPDATE servers SET players = %i, total_joins = total_joins + 1 WHERE id = %i", GetClientCount(), g_server.id);
+        FormatEx(query, sizeof(query), "UPDATE servers SET players = %i, total_joins = total_joins + 1 WHERE id = %i", GetClientCount() - 1, g_server.id);
         transaction.AddQuery(query);
 
         g_hDatabase.Execute(transaction, _, Thread_Empty_TransactionFail);
@@ -1405,10 +1809,11 @@ public void Thread_GetPlayerInfo(Database db, DBResultSet results, const char[] 
     else
     {
         // so if player connected first time, lets insert data about him and draw welcome menu.
-        char query[256];
-        FormatEx(query, sizeof(query), "INSERT INTO players (name, steamid, ip, first_connection) VALUES('%s', '%s', '%s', NOW())", 
+        char query[300];
+        FormatEx(query, sizeof(query), "INSERT INTO players (name, steamid, steamid64, ip, first_connection) VALUES('%s', '%s', '%s', '%s', NOW())", 
                                         g_player[client].name,
                                         g_player[client].steamid,
+                                        g_player[client].steamid64,
                                         g_player[client].ip );
 
         g_hDatabase.Query(Thread_Empty, query);
@@ -1443,14 +1848,14 @@ void ConnectDatabase()
 {
     char error[256];
 
-    g_hDatabase = SQL_Connect("GigaTimer", true, error, sizeof(error));
+    g_hDatabase = SQL_Connect("JetJump", true, error, sizeof(error));
 
     if ( g_hDatabase == INVALID_HANDLE )
-        SetFailState("ERROR | GigaTimer can't connect to database; Check databases.cfg settings;")
+        SetFailState("ERROR | JetJump can't connect to database; Check databases.cfg settings;")
     
     g_hDatabase.SetCharset("utf8");
 
-    PrintToServer("SUCEFULL | GigaTimer Database Connected!");
+    PrintToServer("SUCEFULL | JetJump Database Connected!");
 
     BuildDatabaseTables();
 
@@ -1488,12 +1893,14 @@ void BuildDatabaseTables()
                     id INT NOT NULL AUTO_INCREMENT PRIMARY KEY, \
                     name VARCHAR(64) NOT NULL DEFAULT 'SEX MACHINE', \
                     steamid VARCHAR(128), \
+                    steamid64 VARCHAR(128), \
                     settingsFlag BIGINT NOT NULL DEFAULT 0, \
                     soldier_points DOUBLE NOT NULL DEFAULT 0.0, \
                     demoman_points DOUBLE NOT NULL DEFAULT 0.0, \
                     soldier_rank INT NOT NULL DEFAULT -1, \
                     demoman_rank INT NOT NULL DEFAULT -1, \
                     online_on_server_id INT, \
+                    in_lobby INT NOT NULL DEFAULT -1, \
                     isAdmin INT NOT NULL DEFAULT 0, \
                     ip VARCHAR(32) NOT NULL DEFAULT 'None', \
                     first_connection DATETIME NOT NULL DEFAULT NOW(), \
@@ -1581,6 +1988,23 @@ void BuildDatabaseTables()
                     UNIQUE KEY stages_enter_index (map_id, player_id, class, stage_id) \
                 );");
 
+    t.AddQuery( "CREATE TABLE IF NOT EXISTS lobby \
+                ( \
+                    id INT NOT NULL PRIMARY KEY AUTO_INCREMENT, \
+                    creator_id INT NOT NULL, \
+                    server_id INT NOT NULL, \
+                    password VARCHAR(32), \
+                    lobby_name VARCHAR(32), \
+                    port INT NOT NULL, \
+                    FOREIGN KEY (server_id) REFERENCES servers (id) \
+                    ON DELETE CASCADE \
+                    ON UPDATE CASCADE, \
+                    FOREIGN KEY (creator_id) REFERENCES players (id) \
+                    ON DELETE CASCADE \
+                    ON UPDATE CASCADE, \
+                    UNIQUE KEY lobby_index (creator_id) \
+                );");
+
     t.AddQuery( "CREATE TABLE IF NOT EXISTS points \
                 ( \
                     tier INT NOT NULL PRIMARY KEY, \
@@ -1593,7 +2017,7 @@ void BuildDatabaseTables()
                 (3, 40.0), \
                 (4, 100.0), \
                 (5, 200.0), \
-                (6, 530.0), \
+                (6, 350.0), \
                 (7, 530.0), \
                 (8, 740.0), \
                 (9, 940.0), \
