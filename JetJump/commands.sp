@@ -323,6 +323,8 @@ Action Command_TimerSwitch(int client, int args)
 
 stock void SwitchTimer(int client, bool enable)
 {
+    g_player[client].isTimerOn = enable;
+
     if ( enable )
     {
         FakeClientCommand(client, "sm_restart");
