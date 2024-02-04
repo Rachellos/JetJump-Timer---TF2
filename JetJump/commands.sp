@@ -1,54 +1,54 @@
 void RegisterAllJetJumpCommands()
 {
-    RegisterJetJumpCommand( "sm_nominate", Command_Nominate, "Nominate maps to be on the end of map vote" );
-    AddAliasForCommand( "sm_nominate", "sm_nom");
+    RegisterJetJumpCommand( "/nominate", Command_Nominate, "Nominate maps to be on the end of map vote" );
+    AddAliasForCommand( "/nominate", "/nom");
 
-    RegisterJetJumpCommand( "sm_unnominate", Command_UnNominate, "Removes nominations" );
-    AddAliasForCommand( "sm_unnominate", "sm_unnom");
+    RegisterJetJumpCommand( "/unnominate", Command_UnNominate, "Removes nominations" );
+    AddAliasForCommand( "/unnominate", "/unnom");
 
-    RegisterJetJumpCommand( "sm_rtv", Command_RockTheVote, "Rock The Vote" );
+    RegisterJetJumpCommand( "/rtv", Command_RockTheVote, "Rock The Vote" );
 
-    RegisterJetJumpCommand( "sm_unrtv", Command_UnRockTheVote, "un-Rock The Vote" );
+    RegisterJetJumpCommand( "/unrtv", Command_UnRockTheVote, "un-Rock The Vote" );
 
-    RegisterJetJumpCommand("sm_ve", Command_VE, "Vote For Extend Map");
-    AddAliasForCommand("sm_ve", "sm_voteextend");
+    RegisterJetJumpCommand("/ve", Command_VE, "Vote For Extend Map");
+    AddAliasForCommand("/ve", "/voteextend");
 
-    RegisterJetJumpCommand("sm_revote", Command_Revote, "Revote map choise");	
+    RegisterJetJumpCommand("/revote", Command_Revote, "Revote map choise");	
 
-    RegisterJetJumpCommand("sm_restart", Command_Restart, "Spawn to the map start");
-    AddAliasForCommand("sm_restart", "sm_r");
-    AddAliasForCommand("sm_restart", "sm_reset");
-    AddAliasForCommand("sm_restart", "sm_start");
+    RegisterJetJumpCommand("/restart", Command_Restart, "Spawn to the map start");
+    AddAliasForCommand("/restart", "/r");
+    AddAliasForCommand("/restart", "/reset");
+    AddAliasForCommand("/restart", "/start");
 
-    RegisterJetJumpCommand("sm_timer", Command_TimerSwitch, "Toggle The timer mode");
-    AddAliasForCommand("sm_timer", "sm_enabletimer");
-    AddAliasForCommand("sm_timer", "sm_disabletimer");
+    RegisterJetJumpCommand("/timer", Command_TimerSwitch, "Toggle The timer mode");
+    AddAliasForCommand("/timer", "/enabletimer");
+    AddAliasForCommand("/timer", "/disabletimer");
 
-    RegisterJetJumpCommand("sm_setstart", Command_SetStartPosition, "Set start position");
-    AddAliasForCommand("sm_setstart", "sm_set");
+    RegisterJetJumpCommand("/setstart", Command_SetStartPosition, "Set start position");
+    AddAliasForCommand("/setstart", "/set");
 
-    RegisterJetJumpCommand("sm_clearstart", Command_ClearStartPosition, "Clear start position");
-    AddAliasForCommand("sm_clearstart", "sm_clear");
+    RegisterJetJumpCommand("/clearstart", Command_ClearStartPosition, "Clear start position");
+    AddAliasForCommand("/clearstart", "/clear");
 
-    RegisterJetJumpCommand("sm_stage", Command_TeleportToStage, "Teleport to Stage (number)");
-    AddAliasForCommand("sm_stage", "sm_c");
-    AddAliasForCommand("sm_stage", "sm_st");
+    RegisterJetJumpCommand("/stage", Command_TeleportToStage, "Teleport to Stage (number)");
+    AddAliasForCommand("/stage", "/c");
+    AddAliasForCommand("/stage", "/st");
 
-    RegisterJetJumpCommand("sm_bonus", Command_TeleportToBonus, "Teleport to Bonus (number)");
-    AddAliasForCommand("sm_bonus", "sm_b");
+    RegisterJetJumpCommand("/bonus", Command_TeleportToBonus, "Teleport to Bonus (number)");
+    AddAliasForCommand("/bonus", "/b");
 
-    RegisterJetJumpCommand("sm_drawzone", Command_DrawCurrentZone, "Draw the current zone you stay");
-    AddAliasForCommand("sm_drawzone", "sm_dz");
+    RegisterJetJumpCommand("/drawzone", Command_DrawCurrentZone, "Draw the current zone you stay");
+    AddAliasForCommand("/drawzone", "/dz");
 
-    RegisterJetJumpCommand("sm_top", Command_TopTimes, "Show top times of map");
-    AddAliasForCommand("sm_top", "sm_toptimes");
+    RegisterJetJumpCommand("/top", Command_TopTimes, "Show top times of map");
+    AddAliasForCommand("/top", "/toptimes");
 
-    RegisterJetJumpCommand("sm_noclip", Command_Noclip, "Fly mode (disable timer)");
-    AddAliasForCommand("sm_noclip", "sm_nc");
+    RegisterJetJumpCommand("/noclip", Command_Noclip, "Fly mode (disable timer)");
+    AddAliasForCommand("/noclip", "/nc");
 
-    RegisterJetJumpCommand("sm_commands", Command_CommandsList, "This menu");
+    RegisterJetJumpCommand("/commands", Command_CommandsList, "This menu");
 
-    RegisterJetJumpCommand("sm_connect", Command_ConnectToLobby, "Connect to the lobby");
+    RegisterJetJumpCommand("/connect", Command_ConnectToLobby, "Connect to the lobby");
 }
 
 void RegisterJetJumpCommand(const char[] command,
@@ -65,9 +65,14 @@ void RegisterJetJumpCommand(const char[] command,
     g_commands[newCommand].AdminFlag = flag;
 
     strcopy(g_commands[newCommand].commandName, sizeof(Commands::commandName), command);
+
     strcopy(g_commands[newCommand].description, sizeof(Commands::description), description);
 
-    RegConsoleCmd(command, callback, description, flag);
+    char registerCommand[64];
+    strcopy(registerCommand, sizeof(registerCommand), g_commands[newCommand].commandName);
+    ReplaceString(registerCommand, sizeof(registerCommand), "/", "sm_");
+
+    RegConsoleCmd(registerCommand, callback, description, flag);
 }
 
 void AddAliasForCommand(const char[] command, const char[] alias)
@@ -81,9 +86,14 @@ void AddAliasForCommand(const char[] command, const char[] alias)
     g_commands[newCommand] = g_commands[mainCommand];
 
     strcopy(g_commands[newCommand].commandName, sizeof(Commands::commandName), alias);
+
     g_commands[newCommand].isMainCommand = false;
 
-    RegConsoleCmd(alias, g_commands[newCommand].callback, g_commands[newCommand].description, g_commands[newCommand].AdminFlag);
+    char registerCommand[64];
+    strcopy(registerCommand, sizeof(registerCommand), g_commands[newCommand].commandName);
+    ReplaceString(registerCommand, sizeof(registerCommand), "/", "sm_");
+
+    RegConsoleCmd(registerCommand, g_commands[newCommand].callback, g_commands[newCommand].description, g_commands[newCommand].AdminFlag);
 }
 
 int FindCommandByName(const char[] name)
@@ -155,7 +165,7 @@ Action Command_CommandsList(int client, int args)
         }
     }
 
-    menu.SetTitle("<Commands List Menu> :: %i Total\n \n ", count);
+    menu.SetTitle("<Commands List Menu> :: %i Total\n \n", count);
     menu.Display(client, MENU_TIME_FOREVER);
 
     g_player[client].SetNewPrevMenu(menu);
@@ -178,36 +188,54 @@ int CommandList_MenuHandler(Menu menu, MenuAction action, int client, int item)
 
         int commandId = StringToInt(szItem);
 
-        Menu descMenu = new Menu(CommandDescription_MenuHandler);
+        Panel descPanel = new Panel();
 
-        descMenu.SetTitle("Command Description :: %s\n \n ", g_commands[commandId].commandName);
+        char title[64];
+        FormatEx(title, sizeof(title), "<Command Description> :: %s\n \n", g_commands[commandId].commandName);
 
-        descMenu.AddItem("", g_commands[commandId].description, ITEMDRAW_DISABLED);
-        descMenu.AddItem("", "", ITEMDRAW_SPACER);
-        descMenu.AddItem("", "Aliases:", ITEMDRAW_DISABLED);
+        descPanel.SetTitle(title);
 
+        descPanel.DrawText(g_commands[commandId].description);
+        descPanel.DrawItem("", ITEMDRAW_SPACER);
+
+        bool aliasExists;
         for (int i; i < MAX_COMMANDS; i++)
         {
             if ( g_commands[i].exists && !g_commands[i].isMainCommand && g_commands[i].callback == g_commands[commandId].callback )
             {
-                descMenu.AddItem("", g_commands[i].commandName, ITEMDRAW_DISABLED);
+                if ( !aliasExists )
+                    descPanel.DrawText("Aliases:");
+
+                descPanel.DrawText(g_commands[i].commandName);
+                aliasExists = true;
             }
         }
 
-        descMenu.ExitBackButton = true;
-        descMenu.Display(client, MENU_TIME_FOREVER);
+        descPanel.DrawItem("", ITEMDRAW_SPACER);
+        descPanel.DrawItem("", ITEMDRAW_SPACER);
+
+        descPanel.CurrentKey = 8;
+        descPanel.DrawItem("Back", ITEMDRAW_CONTROL);
+
+        descPanel.CurrentKey = 10;
+        descPanel.DrawItem("Exit", ITEMDRAW_CONTROL);
+
+        descPanel.Send(client, CommandDescription_MenuHandler, MENU_TIME_FOREVER);
     }
 
     return 0;
 }
 
-int CommandDescription_MenuHandler(Menu menu, MenuAction action, int client, int item)
+int CommandDescription_MenuHandler(Menu panel, MenuAction action, int client, int item)
 {
-    if ( action == MenuAction_End ) { return 0; }
-
-    if ( action == MenuAction_Cancel && item == MenuCancel_ExitBack )
+    if ( action == MenuAction_Select )
     {
-        g_player[client].CallPrevMenu();
+        if ( item == 8 )
+        {
+            g_player[client].CallPrevMenu();
+
+            delete panel;
+        }
     }
 
     return 0;

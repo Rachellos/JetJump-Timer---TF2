@@ -181,15 +181,10 @@ public Action Event_Player_Disconnect(Event event, const char[] name, bool dontB
 public Action Event_Player_Connect(Event event, const char[] name, bool dontBroadcast)
 {
     char strName[MAX_NAME_LENGTH];
-    int client = GetClientOfUserId(event.GetInt("userid"));
     event.GetString("name", strName, sizeof(strName));
 
     MC_PrintToChatAll("{gold}%s {white}joins the server", strName);
 
-    SDKHook(client, SDKHook_GetMaxHealth, OnGetMaxHealth);
-    SDKHook(client, SDKHook_OnTakeDamage, OnTakeDamage);
-
-    ClearPlayerData(client);
     event.BroadcastDisabled = true;
 
     return Plugin_Continue;
@@ -1730,6 +1725,11 @@ void AuthPlayer(int client)
     
     char query[300];
 
+    SDKHook(client, SDKHook_GetMaxHealth, OnGetMaxHealth);
+    SDKHook(client, SDKHook_OnTakeDamage, OnTakeDamage);
+
+    ClearPlayerData(client);
+
     g_player[client].clientIndex = client;
     GetClientAuthId(client, AuthId_Steam2, g_player[client].steamid, sizeof(Player::steamid));
     GetClientAuthId(client, AuthId_SteamID64, g_player[client].steamid64, sizeof(Player::steamid64));
@@ -1771,6 +1771,8 @@ void Thread_GetPlayerInfo(Database db, DBResultSet results, const char[] error, 
         LogError(error);
         return;
     }
+
+    ShowWelcomeMenu(client);
 
     if ( !GetClientName(client, g_player[client].name, sizeof(Player::name)) )
         FormatEx(g_player[client].name, sizeof(Player::name), "None");
@@ -1825,10 +1827,44 @@ void Thread_GetPlayerInfo(Database db, DBResultSet results, const char[] error, 
 
         // Auth this player again to get default data
         AuthPlayer(client);
+
+        ShowWelcomeMenu(client);
     }
 
     return;
 }
+
+void ShowWelcomeMenu(int client)
+{
+    Panel panel = new Panel();
+
+    panel.SetTitle("Welcome to the JetJump (We need to think about the name)\n \n ");
+
+    panel.DrawText("The plugin is currently in alpha version,\nbut basic things have been implemented, such as:\n ");
+    panel.DrawText("Timer;\nNew 'fair' points system;\nA few commands that you can see in /commands;\n ");
+    panel.DrawText("Work is underway on innovative features for this mode.\n ");
+    panel.DrawText("In the future, servers will be launched all over the world,\nimmediately after the project is fully ready.\n \n \n ");
+
+    panel.CurrentKey = 10;
+    panel.DrawItem("[Understandable]", ITEMDRAW_CONTROL);
+
+    panel.Send(client, Welcome_MenuHandler, MENU_TIME_FOREVER);
+}
+
+int Welcome_MenuHandler(Menu panel, MenuAction action, int client, int item)
+{
+    if ( action == MenuAction_End )
+        delete panel;
+    
+    if ( action == MenuAction_Select )
+    {
+        if ( item == 10 )
+            delete panel;
+    }
+
+    return 0;
+}
+
 
 // empty thread callback for non-select queries.
 public void Thread_Empty(Database db, DBResultSet results, const char[] error, any data)
