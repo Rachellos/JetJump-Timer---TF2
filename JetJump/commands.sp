@@ -43,6 +43,11 @@ void RegisterAllJetJumpCommands()
     RegisterJetJumpCommand("sm_top", Command_TopTimes, "Show top times of map");
     AddAliasForCommand("sm_top", "sm_toptimes");
 
+    RegisterJetJumpCommand("sm_noclip", Command_Noclip, "Fly mode (disable timer)");
+    AddAliasForCommand("sm_noclip", "sm_nc");
+
+    RegisterJetJumpCommand("sm_commands", Command_CommandsList, "This menu");
+
     RegisterJetJumpCommand("sm_connect", Command_ConnectToLobby, "Connect to the lobby");
 }
 
@@ -101,7 +106,7 @@ int GetFreeCommandListIndex()
     return 0;
 }
 
-public Action Command_ConnectToLobby(int client, int args)
+Action Command_ConnectToLobby(int client, int args)
 {
     if ( !(1 <= client <= MaxClients) ) return Plugin_Handled;
 
@@ -131,7 +136,84 @@ public Action Command_ConnectToLobby(int client, int args)
     return Plugin_Handled;
 }
 
-public Action Command_Restart(int client, int args)
+Action Command_CommandsList(int client, int args)
+{
+    if ( !(1 <= client <= MaxClients) ) return Plugin_Handled;
+
+    Menu menu = new Menu(CommandList_MenuHandler);
+    int count;
+
+    for (int i; i < MAX_COMMANDS; i++)
+    {
+        if ( g_commands[i].exists && g_commands[i].isMainCommand )
+        {
+            char szNum[10];
+            IntToString(i, szNum, sizeof(szNum));
+
+            menu.AddItem(szNum, g_commands[i].commandName);
+            count++;
+        }
+    }
+
+    menu.SetTitle("<Commands List Menu> :: %i Total\n \n ", count);
+    menu.Display(client, MENU_TIME_FOREVER);
+
+    g_player[client].SetNewPrevMenu(menu);
+
+    return Plugin_Handled;
+}
+
+int CommandList_MenuHandler(Menu menu, MenuAction action, int client, int item)
+{
+    if ( action == MenuAction_End ) { return 0; }
+    if ( action == MenuAction_Cancel && item == MenuCancel_ExitBack )
+    {
+        return 0;
+    }
+
+    if ( action == MenuAction_Select )
+    {
+        char szItem[10];
+        menu.GetItem(item, szItem, sizeof(szItem));
+
+        int commandId = StringToInt(szItem);
+
+        Menu descMenu = new Menu(CommandDescription_MenuHandler);
+
+        descMenu.SetTitle("Command Description :: %s\n \n ", g_commands[commandId].commandName);
+
+        descMenu.AddItem("", g_commands[commandId].description, ITEMDRAW_DISABLED);
+        descMenu.AddItem("", "", ITEMDRAW_SPACER);
+        descMenu.AddItem("", "Aliases:", ITEMDRAW_DISABLED);
+
+        for (int i; i < MAX_COMMANDS; i++)
+        {
+            if ( g_commands[i].exists && !g_commands[i].isMainCommand && g_commands[i].callback == g_commands[commandId].callback )
+            {
+                descMenu.AddItem("", g_commands[i].commandName, ITEMDRAW_DISABLED);
+            }
+        }
+
+        descMenu.ExitBackButton = true;
+        descMenu.Display(client, MENU_TIME_FOREVER);
+    }
+
+    return 0;
+}
+
+int CommandDescription_MenuHandler(Menu menu, MenuAction action, int client, int item)
+{
+    if ( action == MenuAction_End ) { return 0; }
+
+    if ( action == MenuAction_Cancel && item == MenuCancel_ExitBack )
+    {
+        g_player[client].CallPrevMenu();
+    }
+
+    return 0;
+}
+
+Action Command_Restart(int client, int args)
 {
     if ( !(1 <= client <= MaxClients) ) return Plugin_Handled;
 
@@ -161,31 +243,101 @@ public Action Command_Restart(int client, int args)
         return Plugin_Handled;
     }
 
+    DestroyRocketsAndSticks(client);
+
     TF2_RegeneratePlayer(client);
     
     return Plugin_Handled;
 }
 
-public Action Command_TimerSwitch(int client, int args)
+stock void DestroyRocketsAndSticks(int client)
+{
+    if (!IsValidEntity(client))
+    {
+        return;
+    }
+
+    int entity = -1;
+    
+    // Stickies 
+    while ((entity = FindEntityByClassname(entity, "tf_projectile_pipe_remote")) != -1)
+    {
+        if (IsValidEntity(entity))
+        {
+            // Uses different ent property for tracking the owner then Soldier
+            if (GetEntPropEnt(entity, Prop_Data, "m_hThrower") == client)
+            {
+                RemoveEdict(entity);
+            }
+        }
+    }
+    
+    // Pipes
+    while ((entity = FindEntityByClassname(entity, "tf_projectile_pipe")) != -1)
+    {
+        if (IsValidEntity(entity))
+        {
+            // Uses different ent property for tracking the owner then Soldier
+            if (GetEntPropEnt(entity, Prop_Data, "m_hThrower") == client)
+            {
+                RemoveEdict(entity);
+            }
+        }
+    }
+    
+    // Normal Rockets
+    while ((entity = FindEntityByClassname(entity, "tf_projectile_rocket")) != -1)
+    {
+        if (IsValidEntity(entity))
+        {
+            if (GetEntPropEnt(entity, Prop_Data, "m_hOwnerEntity") == client)
+            {
+                RemoveEdict(entity);
+            }
+        }
+    }
+
+    // Cow Mangler rockets
+    while ((entity = FindEntityByClassname(entity, "tf_projectile_energy_ball")) != -1)
+    {
+        if (IsValidEntity(entity))
+        {
+            if (GetEntPropEnt(entity, Prop_Data, "m_hOwnerEntity") == client)
+            {
+                RemoveEdict(entity);
+            }
+        }
+    }
+}
+
+Action Command_TimerSwitch(int client, int args)
 {
     if ( !(1 <= client <= MaxClients) ) return Plugin_Handled;
 
     g_player[client].isTimerOn = !g_player[client].isTimerOn;
 
+    SwitchTimer(client, g_player[client].isTimerOn);
+
+    return Plugin_Handled;
+}
+
+stock void SwitchTimer(int client, bool status)
+{
     if ( g_player[client].isTimerOn )
     {
         JetJump_PrintToChat(client, "Timer {accent}Enabled");
         FakeClientCommand(client, "sm_restart");
+
+        if ( GetEntityMoveType(client) == MOVETYPE_NOCLIP )
+            SetEntityMoveType(client, MOVETYPE_WALK);
     }
     else
     {
         JetJump_PrintToChat(client, "Timer {red}Disabled");
     }
-
-    return Plugin_Handled;
 }
 
-public Action Command_SetStartPosition(int client, int args)
+Action Command_SetStartPosition(int client, int args)
 {
     if ( !(1 <= client <= MaxClients) ) return Plugin_Handled;
 
@@ -199,7 +351,7 @@ public Action Command_SetStartPosition(int client, int args)
     return Plugin_Handled;
 }
 
-public Action Command_ClearStartPosition(int client, int args)
+Action Command_ClearStartPosition(int client, int args)
 {
     if ( !(1 <= client <= MaxClients) ) return Plugin_Handled;
 
@@ -213,7 +365,7 @@ public Action Command_ClearStartPosition(int client, int args)
     return Plugin_Handled;
 }
 
-public Action Command_TeleportToStage(int client, int args)
+Action Command_TeleportToStage(int client, int args)
 {
     if ( !(1 <= client <= MaxClients) ) return Plugin_Handled;
     if ( !IsPlayerAlive(client) ) return Plugin_Handled;
@@ -297,7 +449,7 @@ public Action Command_TeleportToStage(int client, int args)
     return Plugin_Handled;
 }
 
-public Action Command_TeleportToBonus(int client, int args)
+Action Command_TeleportToBonus(int client, int args)
 {
     if ( !(1 <= client <= MaxClients) ) return Plugin_Handled;
     if ( !IsPlayerAlive(client) ) return Plugin_Handled;
@@ -404,7 +556,7 @@ int MenuHander_TeleportToRunMenu(Menu menu, MenuAction action, int client, int i
     return 0;
 }
 
-public Action Command_DrawCurrentZone(int client, int args)
+Action Command_DrawCurrentZone(int client, int args)
 {
     if ( !(1 <= client <= MaxClients) ) return Plugin_Handled;
     if ( !IsPlayerAlive(client) ) return Plugin_Handled;
@@ -416,11 +568,32 @@ public Action Command_DrawCurrentZone(int client, int args)
     return Plugin_Handled;
 }
 
-public Action Command_TopTimes(int client, int args)
+Action Command_Noclip(int client, int args)
 {
     if ( !(1 <= client <= MaxClients) ) return Plugin_Handled;
 
-    CloseLobbyServer(g_player[client].currentLobby);
+    if ( !IsPlayerAlive(client) )
+    {
+        JetJump_PrintToChat(client, "You must be Alive to use this command.");
+        return Plugin_Handled;
+    }
+
+    if ( g_player[client].isTimerOn )
+        SwitchTimer(client, false)
+    
+    SetEntityMoveType(client, GetEntityMoveType(client) == MOVETYPE_WALK ? MOVETYPE_NOCLIP : MOVETYPE_WALK);
+
+    JetJump_PrintToChat(client, "Noclip {accent}%s", GetEntityMoveType(client) == MOVETYPE_WALK ? "OFF" : "ON");
+
+    return Plugin_Handled;
+}
+
+Action Command_TopTimes(int client, int args)
+{
+    if ( !(1 <= client <= MaxClients) ) return Plugin_Handled;
+
+    //CloseLobbyServer(g_player[client].currentLobby);
+
     char query[255];
 
     char szTarget[32];
@@ -523,8 +696,6 @@ int TopTimes_TypeChoise_MenuHandler(Menu menu, MenuAction action, int client, in
         int map_id = StringToInt(itemData[0]);
         int run_type = StringToInt(itemData[1]);
         int run_id = StringToInt(itemData[2]);
-        
-        g_player[client].SetNewPrevMenu(menu);
 
         DrawTopTimes(client, map_id, run_type, run_id, g_player[client].currentClass != CLASS_INVALID ? g_player[client].currentClass : CLASS_SOLDIER);
     }
@@ -555,9 +726,8 @@ void DrawTopTimes(int client, int map_id, int run_type, int run_id, Class class)
 }
 
 
-public void Thread_DrawTopTimes (Database db, any client, int numQueries, DBResultSet[] results, any[] queryData)
+void Thread_DrawTopTimes (Database db, any client, int numQueries, DBResultSet[] results, any[] queryData)
 {
-
     Menu menu = new Menu(DrawTopTimes_MenuHandler);
 
     int mapId, runId;

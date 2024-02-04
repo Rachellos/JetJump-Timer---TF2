@@ -210,10 +210,6 @@ public void OnChildSocketError(Socket socket, const int errorType, const int err
 		//If the handle to the client socket and the socket is connected, send the message :
 		if(client && client.Connected)
 		{
-			DataPack data = new DataPack();
-			data.WriteCellArray(g_lobby[index], sizeof(Lobby));
-
-			client.SetArg(data);
 			client.Send( "get datapack" );
 		}
 	}

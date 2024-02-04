@@ -62,6 +62,7 @@ public void OnAllPluginsLoaded()
     HookEvent("teamplay_round_start", OnRoundStart, EventHookMode_Post);
     HookEvent("player_spawn", OnPlayerSpawn, EventHookMode_Post);
     HookEvent("player_connect_client", Event_Player_Connect, EventHookMode_Pre);
+    HookEvent("player_disconnect", Event_Player_Disconnect, EventHookMode_Pre);
 
     g_aMapList = new ArrayList( ByteCountToCells(PLATFORM_MAX_PATH) );
     g_aMapTiersSolly = new ArrayList();
@@ -165,24 +166,33 @@ public void OnMapEnd()
     ClearZonesData();
 }
 
-public Action Event_Player_Connect(Event event, const char[] name, bool dontBroadcast)
+public Action Event_Player_Disconnect(Event event, const char[] name, bool dontBroadcast)
 {
     char strName[MAX_NAME_LENGTH];
     event.GetString("name", strName, sizeof(strName));
 
-    MC_PrintToChatAll("{gold}%s {white}joins the server", strName);
+    MC_PrintToChatAll("{gold}%s {white}has been disconnected", strName);
 
     event.BroadcastDisabled = true;
 
     return Plugin_Continue;
 }
 
-public void OnClientPutInServer(int client)
+public Action Event_Player_Connect(Event event, const char[] name, bool dontBroadcast)
 {
+    char strName[MAX_NAME_LENGTH];
+    int client = GetClientOfUserId(event.GetInt("userid"));
+    event.GetString("name", strName, sizeof(strName));
+
+    MC_PrintToChatAll("{gold}%s {white}joins the server", strName);
+
     SDKHook(client, SDKHook_GetMaxHealth, OnGetMaxHealth);
     SDKHook(client, SDKHook_OnTakeDamage, OnTakeDamage);
 
     ClearPlayerData(client);
+    event.BroadcastDisabled = true;
+
+    return Plugin_Continue;
 }
 
 public Action OnGetMaxHealth(int client, int &maxhealth)
@@ -213,12 +223,6 @@ public void OnClientPostAdminCheck(int client)
     AuthPlayer(client);
 }
 
-public void OnClientDisconnect(int client)
-{
-    MC_PrintToChatAll("{gold}%s {white}has been disconnected", g_player[client].name);
-    ClearPlayerData(client);
-}
-
 Action RegeneratePlayersAmmo(Handle timer)
 {
     for (int client = 1; client <= MaxClients; client++)
@@ -232,6 +236,7 @@ Action RegeneratePlayersAmmo(Handle timer)
         if ( g_run[client].regenAmmo == g_player[client].currentClass || g_run[client].regenAmmo == CLASS_BOTH )
             TF2_RegeneratePlayer(client);
     }
+    
     return Plugin_Continue;
 }
 
