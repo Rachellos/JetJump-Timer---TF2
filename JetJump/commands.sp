@@ -321,20 +321,17 @@ Action Command_TimerSwitch(int client, int args)
     return Plugin_Handled;
 }
 
-stock void SwitchTimer(int client, bool status)
+stock void SwitchTimer(int client, bool enable)
 {
-    if ( g_player[client].isTimerOn )
+    if ( enable )
     {
-        JetJump_PrintToChat(client, "Timer {accent}Enabled");
         FakeClientCommand(client, "sm_restart");
 
         if ( GetEntityMoveType(client) == MOVETYPE_NOCLIP )
             SetEntityMoveType(client, MOVETYPE_WALK);
     }
-    else
-    {
-        JetJump_PrintToChat(client, "Timer {red}Disabled");
-    }
+    
+    JetJump_PrintToChat(client, "Timer %s", enable ? "{accent}Enabled" : "{red}Disabled");
 }
 
 Action Command_SetStartPosition(int client, int args)
