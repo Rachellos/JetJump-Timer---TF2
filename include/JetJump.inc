@@ -179,11 +179,6 @@ enum struct Zone
     bool exists;
 }
 
-enum struct Players
-{
-    ArrayList playersList;
-}
-
 enum struct Lobby
 {
     int id;
@@ -199,8 +194,6 @@ enum struct Lobby
 
     char password[32];
     char lobbyName[32];
-
-    Players players;
 
     bool exists;
 }
@@ -235,10 +228,8 @@ enum struct Player
 
     Class currentClass;
 
-    Socket clientSocket;
     Socket ServerSocket;
     Lobby currentLobby;
-    int clientListenPort;
 
     float setStartPos[3];
     float setStartAng[3];

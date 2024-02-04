@@ -29,8 +29,6 @@ stock void CreateLobbyServer(Player creator, char[] password = "", char[] lobbyN
 
 	g_lobby[lobbyIndex].serverSocket.Listen(OnLobbyIncoming);
 
-	PrintToChat(creator.clientIndex, "Listening port: %i", port);
-
 	char query[255];
 
 	SQL_LockDatabase(g_hDatabase);
@@ -59,13 +57,6 @@ stock void CreateLobbyServer(Player creator, char[] password = "", char[] lobbyN
 	strcopy(g_lobby[lobbyIndex].lobbyName, Lobby::lobbyName, lobbyName);
 
 	g_lobby[lobbyIndex].exists = true;
-	
-	if ( g_lobby[lobbyIndex].players.playersList == INVALID_HANDLE )
-		g_lobby[lobbyIndex].players.playersList = new ArrayList();
-	
-	g_lobby[lobbyIndex].players.playersList.PushArray(creator);
-	creator.currentLobby = g_lobby[lobbyIndex];
-	creator.currentLobby.serverSocket = g_lobby[lobbyIndex].serverSocket
 }
 
 public void Thread_GetLobbyId(Database db, DBResultSet results, const char[] error, any lobbyId)
@@ -108,29 +99,19 @@ public void OnLobbyIncoming(Socket socket, Socket newSocket, char[] remoteIP, in
 //When a client sent a message to the server OR the server sent a message to the client :
 public void OnServerChildSocketReceive(Socket socket, char[] receiveData, const int dataSize, any hFile)
 {
-	PrintToServer("IRC MSG: %s", receiveData); //In any case, always print the message
-
 	int index = -1;
 
 	for (int idx; idx < 10; idx++)
 	{
 		if (g_lobby[idx].lobbyConnectionsSocket == INVALID_HANDLE)
 			g_lobby[idx].lobbyConnectionsSocket = new ArrayList();
-
-		for (int arr; arr < g_lobby[idx].lobbyConnectionsSocket.Length; arr++)
-		{
-			if ( g_lobby[idx].lobbyConnectionsSocket.Get(arr) == socket )
-			{
-				index = idx;
-			}
-		}
 	}
 
 	for (int idx; idx < 10; idx++)
 		if ( g_lobby[idx].lobbyConnectionsSocket.FindValue(socket) != -1 )
 			index = idx;
-
-	PrintToChatAll("Index of lobby array: %i", index);
+	
+	if ( index == -1 ) return;
 	
 	for (int i = 0; i < g_lobby[index].lobbyConnectionsSocket.Length; i++)
 	{
@@ -148,7 +129,7 @@ public void OnServerChildSocketReceive(Socket socket, char[] receiveData, const 
 //When a client disconnect
 public void OnServerChildSocketDisconnected(Socket socket, any hFile)
 {
-	int index = -1, arr_id = -1;
+	int arr_id = -1;
 	
 	for (int idx; idx < 10; idx++)
 	{
@@ -156,23 +137,8 @@ public void OnServerChildSocketDisconnected(Socket socket, any hFile)
 
 		if ( arr_id != -1 )
 		{
-			index = idx;
+			g_lobby[idx].lobbyConnectionsSocket.Erase(arr_id);
 			break;
-		}
-	}
-
-	if (arr_id != -1)
-		g_lobby[index].lobbyConnectionsSocket.Erase(arr_id);
-
-	for (int i = 0; i < g_lobby[index].lobbyConnectionsSocket.Length; i++)
-	{
-		//Get client :
-		Socket client = g_lobby[index].lobbyConnectionsSocket.Get(i);
-		
-		//If the handle to the client socket and the socket is connected, send the message :
-		if(client && client.Connected)
-		{
-			client.Send( "client disconnected from lobby server" );
 		}
 	}
 
@@ -208,7 +174,7 @@ public void OnChildSocketError(Socket socket, const int errorType, const int err
 		Socket client = g_lobby[index].lobbyConnectionsSocket.Get(i);
 		
 		//If the handle to the client socket and the socket is connected, send the message :
-		if(client && client.Connected)
+		if( client && client.Connected )
 		{
 			client.Send( "get datapack" );
 		}
@@ -264,10 +230,14 @@ int GetFreeLobbyPort()
 stock void CloseLobbyServer(Lobby lobby)
 {
 	Lobby emptyLobby;
+	
+	SQL_LockDatabase(g_hDatabase);
 
-	lobby.serverSocket.Send("Lobby Closed");
+	char query[128];
+	FormatEx(query, sizeof(query), "DELETE FROM lobby WHERE id = %i", lobby.id);
+	SQL_FastQuery(g_hDatabase, query);
 
-	lobby.serverSocket.Disconnect();
+	SQL_UnlockDatabase(g_hDatabase);
 
 	for (int i; i <= MaxClients; i++)
 	{
@@ -275,9 +245,11 @@ stock void CloseLobbyServer(Lobby lobby)
 		{
 			JetJump_PrintToChat(g_player[i].clientIndex, "Lobby #%i was {accent}closed{white}! You are no longer in it.", lobby.id);
 			g_player[i].currentLobby = emptyLobby;
-			g_player[i].clientSocket.Disconnect();
 		}
 	}
+
+	if ( lobby.serverSocket && lobby.serverSocket.Connected )
+		lobby.serverSocket.Disconnect();
 
 	// clear the lobby here
 	lobby = emptyLobby;

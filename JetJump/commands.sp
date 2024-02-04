@@ -48,7 +48,15 @@ void RegisterAllJetJumpCommands()
 
     RegisterJetJumpCommand("/commands", Command_CommandsList, "This menu");
 
+    RegisterJetJumpCommand("/createlobby", Command_CreateLobby, "Create the new lobby");
+    AddAliasForCommand("/createlobby", "/create");
+
+    RegisterJetJumpCommand("/closelobby", Command_CloseLobby, "Create the new lobby");
+    AddAliasForCommand("/closelobby", "/close");
+
     RegisterJetJumpCommand("/connect", Command_ConnectToLobby, "Connect to the lobby");
+
+    RegisterJetJumpCommand("/disconnect", Command_DisconnectFromLobby, "Leave from current lobby");
 }
 
 void RegisterJetJumpCommand(const char[] command,
@@ -590,8 +598,55 @@ Action Command_DrawCurrentZone(int client, int args)
 
     DrawZone(client, g_player[client].currentZone);
 
+    return Plugin_Handled;
+}
+
+Action Command_CreateLobby(int client, int args)
+{
+    if ( !(1 <= client <= MaxClients) ) return Plugin_Handled;
+
     CreateLobbyServer(g_player[client]);
 
+    return Plugin_Handled;
+}
+
+Action Command_CloseLobby(int client, int args)
+{
+    if ( !(1 <= client <= MaxClients) ) return Plugin_Handled;
+
+    if ( g_player[client].currentLobby.exists )
+    {
+        for (int i; i < 10; i++)
+            if ( g_lobby[i].creator_id == g_player[client].id )
+            {
+                CloseLobbyServer(g_lobby[i]);
+                return Plugin_Handled;
+            }
+    }
+
+    JetJump_PrintToChat(client, "You can not close the lobby, because you are not the creator.");
+
+    return Plugin_Handled;
+}
+
+Action Command_DisconnectFromLobby(int client, int args)
+{
+    if ( !(1 <= client <= MaxClients) ) return Plugin_Handled;
+
+    if ( g_player[client].currentLobby.exists )
+    {
+        if ( g_player[client].currentLobby.serverSocket )
+            g_player[client].currentLobby.serverSocket.Disconnect();
+        
+        g_player[client].currentLobby.exists = false;
+
+        JetJump_PrintToChat(client, "You have been {red}Disconnected from {accent}Lobby.");
+    }
+    else
+    {
+        JetJump_PrintToChat(client, "You can not in any lobby, so can not leave.");
+    }
+    
     return Plugin_Handled;
 }
 
