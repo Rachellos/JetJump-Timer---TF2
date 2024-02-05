@@ -130,7 +130,7 @@ Action Command_ConnectToLobby(int client, int args)
 
     if ( args > 0 )
     {
-        char arg[3];
+        char arg[10];
         GetCmdArg(1, arg, sizeof(arg));
 
         for (int arg_char; arg_char < strlen(arg); arg_char++)
@@ -636,7 +636,13 @@ Action Command_DisconnectFromLobby(int client, int args)
     if ( g_player[client].currentLobby.exists )
     {
         if ( g_player[client].currentLobby.serverSocket )
+        {
+            char lobbyMsg[MC_MAX_MESSAGE_LENGTH];
+            FormatEx(lobbyMsg, sizeof(lobbyMsg), "::Lobby-Msg:: %i {green}[LOBBY] {maincolor}%s {white}has left the lobby!", g_player[client].id, g_player[client].name);
+
+            g_player[client].currentLobby.serverSocket.Send(lobbyMsg);
             g_player[client].currentLobby.serverSocket.Disconnect();
+        }
         
         g_player[client].currentLobby.exists = false;
 

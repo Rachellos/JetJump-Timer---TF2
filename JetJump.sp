@@ -1120,6 +1120,14 @@ public Action OnClientSayCommand( int client, const char[] szCommand, const char
         if (IsClientConnected(i) && IsClientInGame(i))
             MC_PrintToChat(i, alltext);
     
+    if ( g_player[client].currentLobby.serverSocket )
+    {
+        char lobbyMsg[MC_MAX_MESSAGE_LENGTH];
+        FormatEx(lobbyMsg, sizeof(lobbyMsg), "::Lobby-Msg:: %i {green}| %s{endmsg}", g_player[client].id, alltext);
+        
+        g_player[client].currentLobby.serverSocket.Send(lobbyMsg);
+    }
+    
     return Plugin_Handled;
 }
 
