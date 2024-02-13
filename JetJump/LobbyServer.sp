@@ -16,21 +16,15 @@ stock void CreateLobbyServer(Player creator, char[] password = "", char[] lobbyN
 
 	g_lobby[lobbyIndex].creator_id = creator.id;
 
-	g_lobby[lobbyIndex].serverSocket = SocketCreate(SOCKET_TCP, OnServerSocketError);
-	g_lobby[lobbyIndex].serverSocket.SetArg(lobbyIndex);
-
 	int port = GetFreeLobbyPort();
-
-	if ( !g_lobby[lobbyIndex].serverSocket.Bind("0.0.0.0", port) )
-	{
-		PrintToChat(creator.clientIndex, "cant create server");
-		CreateLobbyServer(creator, password, lobbyName);
-		return;
-	}
 	
-	g_lobby[lobbyIndex].serverSocket.Listen(OnLobbyIncoming);
+	Event OnClientSockCreate = CreateEvent("jetjump_server_socket_created", true);
+	OnClientSockCreate.SetInt("port", port);
+	OnClientSockCreate.SetInt("lobbyIndex", port);
 
-	g_lobby[lobbyIndex].lobbyConnectionsSocket = new ArrayList();
+	OnClientSockCreate.Fire();
+
+	g_lobby[lobbyIndex].lobbyConnectionsData = new ArrayList(ByteCountToCells(128));
 
 	char query[255];
 
@@ -79,32 +73,43 @@ public void Thread_GetLobbyId(Database db, DBResultSet results, const char[] err
 	}
 }
 
-public void OnLobbyIncoming(Socket socket, Socket newSocket, char[] remoteIP, int remotePort, any index)
-{
-	PrintToServer("Another player connected to the lobby server ! from (%s)", remoteIP);
-	newSocket.SetArg(index);
-	newSocket.SetReceiveCallback( OnServerChildSocketReceive );
-	newSocket.SetDisconnectCallback( OnServerChildSocketDisconnected );
-	newSocket.SetErrorCallback( OnChildSocketError );
-	
-
-	g_lobby[index].lobbyConnectionsSocket.Push(newSocket);
-}
-
 //When a client sent a message to the server OR the server sent a message to the client :
-public void OnServerChildSocketReceive(Socket socket, char[] receiveData, const int dataSize, any index)
+public Action OnServerChildSocketReceive(Event event, const char[] name, bool dontBroadcast)
 {
-	if ( g_lobby[index].lobbyConnectionsSocket == INVALID_HANDLE ) return;
+	char data[1024];
+	event.GetString("data", data, sizeof(data));
+	int index = event.GetInt("lobby_index");
 
-	for (int i = 0; i < g_lobby[index].lobbyConnectionsSocket.Length; i++)
+	if (StrContains(data, "::NewConnection::"))
 	{
+		ReplaceString(data, sizeof(data), "::NewConnection:: ", "");
+
+		char split[2][32]; // 0 = ip:port  1 = player name
+		ExplodeString(data, " ", split, sizeof(split), sizeof(split[]), true);
+
+		if (g_lobby[index].lobbyConnectionsData.FindString(split[0]) != -1) return Plugin_Handled;
+
+		g_lobby[index].lobbyConnectionsData.PushString(split[0]);
+
+		FormatEx(data, sizeof(data), "::NotifyConnection:: %s", split[1]);
+	}
+
+	if ( g_lobby[index].lobbyConnectionsData == INVALID_HANDLE ) return Plugin_Handled;
+
+	for (int i = 0; i < g_lobby[index].lobbyConnectionsData.Length; i++)
+	{
+		char buff[128];
+		char ip[2][64];
+
 		//Get client :
-		Socket client = g_lobby[index].lobbyConnectionsSocket.Get(i);
+		g_lobby[index].lobbyConnectionsData.GetString(i, buff, sizeof(buff));
+
+		ExplodeString(buff, ":", ip, sizeof(ip), sizeof(ip[]));
 		
 		//If the handle to the client socket and the socket is connected, send the message :
-		if(client && client.Connected)
+		if(g_Socket && g_Socket.Connected)
 		{
-			client.Send( receiveData );
+			g_Socket.SendTo( data, _, ip[0], StringToInt(ip[1]) );
 		}
 	}
 }
@@ -112,11 +117,11 @@ public void OnServerChildSocketReceive(Socket socket, char[] receiveData, const 
 //When a client disconnect
 public void OnServerChildSocketDisconnected(Socket socket, any index)
 {
-	int arr_id = g_lobby[index].lobbyConnectionsSocket.FindValue(socket);
+	int arr_id = g_lobby[index].lobbyConnectionsData.FindValue(socket);
 
 	if ( arr_id != -1 )
 	{
-		g_lobby[index].lobbyConnectionsSocket.Erase(arr_id);
+		g_lobby[index].lobbyConnectionsData.Erase(arr_id);
 	}
 
 	PrintToChatAll("player disconnected from host");
@@ -131,11 +136,11 @@ public void OnChildSocketError(Socket socket, const int errorType, const int err
 
 	int arr_id = -1;
 	
-	arr_id = g_lobby[index].lobbyConnectionsSocket.FindValue(socket);
+	arr_id = g_lobby[index].lobbyConnectionsData.FindValue(socket);
 
 	if ( arr_id != -1 )
 	{
-		g_lobby[index].lobbyConnectionsSocket.Erase(arr_id);
+		g_lobby[index].lobbyConnectionsData.Erase(arr_id);
 	}
 
 	PrintToChatAll("player disconnected from host (error)");

@@ -22,7 +22,7 @@ public void Thread_ConnectToLobby(Database db, DBResultSet results, const char[]
 			g_player[client].currentLobby.exists = false;
 		}
 
-		char ipBuff[64], ip[2][32], password[256];
+		char ipBuff[64], ip[2][64], password[256];
 		int port;
 
 		results.FetchString(0, ipBuff, sizeof(ipBuff));
@@ -32,13 +32,21 @@ public void Thread_ConnectToLobby(Database db, DBResultSet results, const char[]
 
 		results.FetchString(2, password, sizeof(password));
 
-		g_player[client].currentLobby.serverSocket = new Socket(SOCKET_TCP, OnServerSocketError);
-
 		g_player[client].currentLobby.id = results.FetchInt(3);
 
+		g_player[client].currentLobby.ip = ip[0];
+		g_player[client].currentLobby.port = port;
+
 		JetJump_PrintToChat(client, "Connecting to {accent}Lobby...");
-		g_player[client].currentLobby.serverSocket.SetArg(client);
-		g_player[client].currentLobby.serverSocket.Connect(OnServerSocketConnected, OnServerSocketReceive, OnSocketDisconnected, ip[0], port);
+		char send[128];
+
+		Event OnClientSockCreate = CreateEvent("jetjump_client_socket_created", true);
+		OnClientSockCreate.SetInt("port", port);
+
+		OnClientSockCreate.Fire();
+
+		FormatEx(send, sizeof(send), "::NewConnection:: %s", g_player[client].name);
+		g_Socket.SendTo(send, _, ip[0], port);
 	}
 	else
 	{
@@ -80,69 +88,76 @@ public void OnSocketDisconnected(Socket socket, any hFile)
 }
 
 //When a client sent a message to the MCS OR the MCS sent a message to the client, and the MCS have to handle it :
-public void OnServerSocketReceive(Socket socket, char[] receiveData, const int dataSize, any pack)
+public void OnServerSocketReceive(Event event, const char[] name, bool dontBroadcast)
 {
-	char buff[10][MC_MAX_MESSAGE_LENGTH];
-	int dataCount = ExplodeString(receiveData, "{endmsg}", buff, sizeof(buff), sizeof(buff[]));
-
 	char text[MC_MAX_MESSAGE_LENGTH];
 
-	for (int num; num < dataCount; num++)
+	event.GetString("data", text, sizeof(text));
+
+	if ( StrContains(text, "::NotifyConnection::") != -1 )
 	{
-		text = buff[num];
+		ReplaceString(text, sizeof(text), "::NotifyConnection:: ", "");
 
-		if ( StrContains(text, "::Lobby-Msg::") != -1 )
+		for (int i = 1; i <= MaxClients; i++)
 		{
-			ReplaceString(text, dataSize, "::Lobby-Msg:: ", "")
-
-			char msg[2][MC_MAX_MESSAGE_LENGTH];
-			ExplodeString(text, " ", msg, sizeof(msg), sizeof(msg[]), true);
-
-			int playerId = StringToInt(msg[0]);
-
-			// so if message sender on the same server we are, then dont print his message
-			for (int i = 1; i <= MaxClients; i++)
-				if ( g_player[i].id == playerId )
-					return;
-
-			for (int i = 1; i <= MaxClients; i++)
+			if ( IsClientInGame(i) )
 			{
-				if ( g_player[i].currentLobby.serverSocket == socket && IsClientInGame(i) )
-				{
-					MC_PrintToChat(i, msg[1]);
-				}
+				MC_PrintToChat(i, "{green}[LOBBY] {maincolor}%s {white}just join the lobby!");
 			}
 		}
-		else if ( StrContains(text, "::Movement-Data::") != -1 )
+	}
+
+	if ( StrContains(text, "::Lobby-Msg::") != -1 )
+	{
+		ReplaceString(text, sizeof(text), "::Lobby-Msg:: ", "");
+
+		char msg[2][MC_MAX_MESSAGE_LENGTH];
+		ExplodeString(text, " ", msg, sizeof(msg), sizeof(msg[]), true);
+
+		int playerId = StringToInt(msg[0]);
+
+		// so if message sender on the same server we are, then dont print his message
+		for (int i = 1; i <= MaxClients; i++)
+			if ( g_player[i].id == playerId )
+				return;
+
+		for (int i = 1; i <= MaxClients; i++)
 		{
-			ReplaceString(text, dataSize, "::Movement-Data:: ", "")
-
-			static int laser;
-			laser = PrecacheModel("sprites/laserbeam.vmt")
-
-			char data[4][MC_MAX_MESSAGE_LENGTH];
-			ExplodeString(text, " ", data, sizeof(data), sizeof(data[]));
-
-			int playerId = StringToInt(data[0]);
-			float startPosition[3], endPosition[3];
-
-			for (int cur = 1; cur < 4; cur++)
-				startPosition[cur-1] = StringToFloat(data[cur]);
-
-			endPosition = startPosition;
-			endPosition[2] += 100;
-
-			TE_SetupBeamPoints(startPosition, endPosition, laser, 0, 0, 0, 0.25, 32.0, 32.0, 0, 0.0, {255, 215, 0, 255}, 0);
-
-			for (int i = 1; i <= MaxClients; i++)
-				if ( g_player[i].currentLobby.serverSocket == socket && IsClientInGame(i) )
-					TE_SendToClient(i);
+			if ( IsClientInGame(i) )
+			{
+				MC_PrintToChat(i, msg[1]);
+			}
 		}
-		else if ( StrContains(text, "::Normal-IRC-Msg::") != -1 )
-		{
-			ReplaceString(text, dataSize, "::Normal-IRC-Msg:: ", "")
-			MC_PrintToChatAll(text);
-		}
+	}
+	else if ( StrContains(text, "::Movement-Data::") != -1 )
+	{
+		ReplaceString(text, sizeof(text), "::Movement-Data:: ", "")
+
+		static int laser;
+		laser = PrecacheModel("sprites/laserbeam.vmt")
+
+		char data[4][MC_MAX_MESSAGE_LENGTH];
+		ExplodeString(text, " ", data, sizeof(data), sizeof(data[]));
+
+		int playerId = StringToInt(data[0]);
+		float startPosition[3], endPosition[3];
+
+		for (int cur = 1; cur < 4; cur++)
+			startPosition[cur-1] = StringToFloat(data[cur]);
+
+		endPosition = startPosition;
+		endPosition[2] += 100;
+
+		TE_SetupBeamPoints(startPosition, endPosition, laser, 0, 0, 0, 0.25, 32.0, 32.0, 0, 0.0, {255, 215, 0, 255}, 0);
+
+		for (int i = 1; i <= MaxClients; i++)
+			if ( IsClientInGame(i) )
+				TE_SendToClient(i);
+	}
+	else if ( StrContains(text, "::Normal-IRC-Msg::") != -1 )
+	{
+		ReplaceString(text, sizeof(text), "::Normal-IRC-Msg:: ", "")
+		MC_PrintToChatAll(text);
 	}
 }
 

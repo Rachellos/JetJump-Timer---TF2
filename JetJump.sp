@@ -30,6 +30,8 @@ Player g_player[MAXPLAYERS+1];
 
 Lobby g_lobby[10];
 
+Socket g_Socket;
+
 #include <JetJump\commands.sp>
 #include <JetJump\mapchooser.sp>
 #include <JetJump\LobbyServer.sp>
@@ -79,6 +81,11 @@ public void OnAllPluginsLoaded()
     RegisterAllJetJumpCommands();
 
     DrawPlayersHud();
+
+    g_Socket = new Socket(SOCKET_UDP, OnServerSocketError);
+    
+    HookEvent("On_Server_Got_Data", OnServerChildSocketReceive);
+    HookEvent("On_Client_Got_Data", OnServerSocketReceive);
 }
 
 void OnRoundStart(Event event, const char[] name, bool dontBroadcast)
@@ -1805,8 +1812,6 @@ void Thread_GetPlayerInfo(Database db, DBResultSet results, const char[] error, 
         g_player[client].demomanRank = results.FetchInt(5);
 
         g_player[client].isAdmin = view_as<bool>(results.FetchInt(6));
-
-        g_player[client].currentLobby.lobbyConnectionsSocket = new ArrayList();
 
         Transaction transaction = new Transaction();
 

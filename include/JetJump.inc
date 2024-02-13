@@ -185,10 +185,11 @@ enum struct Lobby
 
     int serverHost_id;
 
+    char ip[64];
     int port;
 
     Socket serverSocket;
-    ArrayList lobbyConnectionsSocket;
+    ArrayList lobbyConnectionsData;
     
     int creator_id;
 
