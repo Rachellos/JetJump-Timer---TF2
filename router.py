@@ -8,14 +8,6 @@ from socket import socket as sock
 from threading import Thread
 
 
-def load():
-    print('Plugin has been loaded successfully!')
-
-
-def unload():
-    print('Plugin has been unloaded successfully!')
-
-
 class On_Server_Got_Data(CustomEvent):
     data = StringVariable("Receive Data Gotten for server socket")
     lobby_index = ShortVariable("Lobby array id for management")
@@ -33,6 +25,14 @@ resource_file.load_events()
 resource_file2 = ResourceFile('my_custom_events', On_Client_Got_Data)
 resource_file2.write()
 resource_file2.load_events()
+
+
+def load():
+    print('Plugin has been loaded successfully!')
+
+
+def unload():
+    print('Plugin has been unloaded successfully!')
 
 
 def fire_got_sever_data_event(msg, lobby):
@@ -66,7 +66,7 @@ def client_socket_thread(arg):
         fire_got_client_data_event(data)
 
 
-@Event('jetjump_server_socket_created')
+@Event('jetjump_servercreate')
 def on_server_socket_create(sm_event):
     port = sm_event['port']
     lobby = sm_event['lobby_id']
@@ -81,7 +81,7 @@ def on_server_socket_create(sm_event):
     print("On_Server_Socket_Created CALLED")
 
 
-@Event('jetjump_client_socket_created')
+@Event('jetjump_clientcreate')
 def on_client_socket_create(sm_event):
     port = sm_event['port']
     server = sock(socket.AF_INET, socket.SOCK_DGRAM)

@@ -40,7 +40,7 @@ public void Thread_ConnectToLobby(Database db, DBResultSet results, const char[]
 		JetJump_PrintToChat(client, "Connecting to {accent}Lobby...");
 		char send[128];
 
-		Event OnClientSockCreate = CreateEvent("jetjump_client_socket_created", true);
+		Event OnClientSockCreate = CreateEvent("jetjump_clientcreate", true);
 		OnClientSockCreate.SetInt("port", port);
 
 		OnClientSockCreate.Fire();

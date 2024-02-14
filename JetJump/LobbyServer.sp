@@ -18,9 +18,9 @@ stock void CreateLobbyServer(Player creator, char[] password = "", char[] lobbyN
 
 	int port = GetFreeLobbyPort();
 	
-	Event OnClientSockCreate = CreateEvent("jetjump_server_socket_created", true);
+	Event OnClientSockCreate = CreateEvent("jetjump_servercreate", true);
 	OnClientSockCreate.SetInt("port", port);
-	OnClientSockCreate.SetInt("lobbyIndex", port);
+	OnClientSockCreate.SetInt("lobbyIndex", lobbyIndex);
 
 	OnClientSockCreate.Fire();
 
