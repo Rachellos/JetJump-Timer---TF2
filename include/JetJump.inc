@@ -184,18 +184,14 @@ enum struct Lobby
     int id;
 
     int serverHost_id;
+    char serverHost_ip[64];
 
-    char ip[64];
-    int port;
-
-    Socket serverSocket;
-    ArrayList lobbyConnectionsData;
-    
-    int creator_id;
+    ArrayList lobbyConnections;
 
     char password[32];
     char lobbyName[32];
 
+    int creator_id;
     bool exists;
 }
 

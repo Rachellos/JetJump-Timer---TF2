@@ -303,7 +303,7 @@ stock void DestroyRocketsAndSticks(int client)
             // Uses different ent property for tracking the owner then Soldier
             if (GetEntPropEnt(entity, Prop_Data, "m_hThrower") == client)
             {
-                RemoveEdict(entity);
+                RemoveEntity(entity);
             }
         }
     }
@@ -316,7 +316,7 @@ stock void DestroyRocketsAndSticks(int client)
             // Uses different ent property for tracking the owner then Soldier
             if (GetEntPropEnt(entity, Prop_Data, "m_hThrower") == client)
             {
-                RemoveEdict(entity);
+                RemoveEntity(entity);
             }
         }
     }
@@ -328,7 +328,7 @@ stock void DestroyRocketsAndSticks(int client)
         {
             if (GetEntPropEnt(entity, Prop_Data, "m_hOwnerEntity") == client)
             {
-                RemoveEdict(entity);
+                RemoveEntity(entity);
             }
         }
     }
@@ -340,7 +340,7 @@ stock void DestroyRocketsAndSticks(int client)
         {
             if (GetEntPropEnt(entity, Prop_Data, "m_hOwnerEntity") == client)
             {
-                RemoveEdict(entity);
+                RemoveEntity(entity);
             }
         }
     }
@@ -614,18 +614,7 @@ Action Command_CloseLobby(int client, int args)
 {
     if ( !(1 <= client <= MaxClients) ) return Plugin_Handled;
 
-    if ( g_player[client].currentLobby.exists )
-    {
-        for (int i; i < 10; i++)
-            if ( g_lobby[i].creator_id == g_player[client].id )
-            {
-                CloseLobbyServer(g_lobby[i]);
-                return Plugin_Handled;
-            }
-    }
-
-    JetJump_PrintToChat(client, "You can not close the lobby, because you are not the creator.");
-
+    CloseLobbyServer(client);
     return Plugin_Handled;
 }
 
@@ -633,25 +622,7 @@ Action Command_DisconnectFromLobby(int client, int args)
 {
     if ( !(1 <= client <= MaxClients) ) return Plugin_Handled;
 
-    if ( g_player[client].currentLobby.exists )
-    {
-        if ( g_player[client].currentLobby.serverSocket )
-        {
-            char lobbyMsg[MC_MAX_MESSAGE_LENGTH];
-            FormatEx(lobbyMsg, sizeof(lobbyMsg), "::Lobby-Msg:: %i {green}[LOBBY] {maincolor}%s {white}has left the lobby!", g_player[client].id, g_player[client].name);
-
-            g_player[client].currentLobby.serverSocket.Send(lobbyMsg);
-            g_player[client].currentLobby.serverSocket.Disconnect();
-        }
-        
-        g_player[client].currentLobby.exists = false;
-
-        JetJump_PrintToChat(client, "You have been {red}Disconnected from {accent}Lobby.");
-    }
-    else
-    {
-        JetJump_PrintToChat(client, "You can not in any lobby, so can not leave.");
-    }
+    DisconnectLobby(client);
     
     return Plugin_Handled;
 }
@@ -752,7 +723,7 @@ void Thread_TopTimes_TypeChoise(Database db, DBResultSet results, const char[] e
         if ( runType > 0 )
             FormatEx(itemName, sizeof(itemName), "%s %i", runName[runType], runId);
         else
-            FormatEx(itemName, sizeof(itemName), "Map Run");
+            FormatEx(itemName, sizeof(itemName), "Map Run\n ");
 
         if ( prevRunType != runType )
             menu.AddItem( "", "\n", ITEMDRAW_RAWLINE );

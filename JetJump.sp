@@ -28,7 +28,7 @@ StageEnterTime g_stageEnterTimes[RECORDS_LIMIT];
 
 Player g_player[MAXPLAYERS+1];
 
-Lobby g_lobby[10];
+Lobby g_lobby;
 
 Socket g_Socket;
 
@@ -50,12 +50,18 @@ public APLRes AskPluginLoad2(Handle myself, bool late, char[] error, int err_max
             RequestFrame(AuthPlayer, i);
         }
     }
+
+    ServerCommand("sp plugin load router");
     
     return APLRes_Success;
 }
 
-public void OnAllPluginsLoaded()
+public void OnPluginStart()
 {
+    // module on Source.Python for receive UDP data (Lobby stuff)
+    ServerCommand("sp plugin load router");
+    CreateTimer(5.0, OnRouterLoaded);
+
     MC_AddColor("maincolor", 0x62DA9A);
     MC_AddColor("accent", 0xB4F200);
     MC_AddColor("background", 0xF36D91);
@@ -72,6 +78,8 @@ public void OnAllPluginsLoaded()
     g_aNominateList = new ArrayList( ByteCountToCells(PLATFORM_MAX_PATH) );
     g_aOldMaps = new ArrayList( ByteCountToCells(PLATFORM_MAX_PATH) );
 
+    g_lobby.lobbyConnections = new ArrayList(ByteCountToCells(128));
+
     ConnectDatabase();
     // load maplist array
     LoadMapList();
@@ -83,9 +91,14 @@ public void OnAllPluginsLoaded()
     DrawPlayersHud();
 
     g_Socket = new Socket(SOCKET_UDP, OnServerSocketError);
-    
-    HookEvent("On_Server_Got_Data", OnServerChildSocketReceive);
-    HookEvent("On_Client_Got_Data", OnServerSocketReceive);
+}
+
+Action OnRouterLoaded(Handle timer)
+{
+    HookEvent("on_clientgotdata", OnServerSocketReceive);
+    HookEvent("on_servergotdata", OnServerChildSocketReceive);
+
+    return Plugin_Handled;
 }
 
 void OnRoundStart(Event event, const char[] name, bool dontBroadcast)
@@ -176,6 +189,7 @@ public void OnMapEnd()
 public Action Event_Player_Disconnect(Event event, const char[] name, bool dontBroadcast)
 {
     char strName[MAX_NAME_LENGTH];
+
     event.GetString("name", strName, sizeof(strName));
 
     MC_PrintToChatAll("{gold}%s {white}has been disconnected", strName);
@@ -183,6 +197,15 @@ public Action Event_Player_Disconnect(Event event, const char[] name, bool dontB
     event.BroadcastDisabled = true;
 
     return Plugin_Continue;
+}
+
+public OnClientDisconnect(int client)
+{
+    DisconnectLobby(client);
+
+    char query[256];
+    FormatEx(query, sizeof(query), "UPDATE players SET online_on_server_id = NULL, last_connection = NOW() WHERE id = %i;", g_server.id, g_player[client].id);
+    g_hDatabase.Query(Thread_Empty, query);
 }
 
 public Action Event_Player_Connect(Event event, const char[] name, bool dontBroadcast)
@@ -1127,12 +1150,12 @@ public Action OnClientSayCommand( int client, const char[] szCommand, const char
         if (IsClientConnected(i) && IsClientInGame(i))
             MC_PrintToChat(i, alltext);
     
-    if ( g_player[client].currentLobby.serverSocket )
+    if ( g_player[client].currentLobby.exists )
     {
         char lobbyMsg[MC_MAX_MESSAGE_LENGTH];
-        FormatEx(lobbyMsg, sizeof(lobbyMsg), "::Lobby-Msg:: %i {green}| %s{endmsg}", g_player[client].id, alltext);
+        FormatEx(lobbyMsg, sizeof(lobbyMsg), "::Lobby-Msg:: %i {green}| %s", g_player[client].currentLobby.id, alltext);
         
-        g_player[client].currentLobby.serverSocket.Send(lobbyMsg);
+        SendToClients(client, lobbyMsg, true);
     }
     
     return Plugin_Handled;
@@ -1749,7 +1772,7 @@ void AuthPlayer(int client)
     GetClientAuthId(client, AuthId_Steam2, g_player[client].steamid, sizeof(Player::steamid));
     GetClientAuthId(client, AuthId_SteamID64, g_player[client].steamid64, sizeof(Player::steamid64));
 
-    FormatEx( query, sizeof(query), "SELECT id, settingsFlag, soldier_points, demoman_points, soldier_rank, demoman_rank, isAdmin FROM players WHERE steamid = '%s'", g_player[client].steamid );
+    FormatEx( query, sizeof(query), "SELECT id, settingsFlag, soldier_points, demoman_points, soldier_rank, demoman_rank, isAdmin, current_lobby FROM players WHERE steamid = '%s'", g_player[client].steamid );
     g_hDatabase.Query(Thread_GetPlayerInfo, query, client);
 }
 
@@ -1812,6 +1835,9 @@ void Thread_GetPlayerInfo(Database db, DBResultSet results, const char[] error, 
         g_player[client].demomanRank = results.FetchInt(5);
 
         g_player[client].isAdmin = view_as<bool>(results.FetchInt(6));
+
+        if (!results.IsFieldNull(7))
+            ConnectToLobby(client, results.FetchInt(7));
 
         Transaction transaction = new Transaction();
 
@@ -1953,8 +1979,8 @@ void BuildDatabaseTables()
                     demoman_points DOUBLE NOT NULL DEFAULT 0.0, \
                     soldier_rank INT NOT NULL DEFAULT -1, \
                     demoman_rank INT NOT NULL DEFAULT -1, \
-                    online_on_server_id INT, \
-                    in_lobby INT NOT NULL DEFAULT -1, \
+                    online_on_server_id INT DEFAULT NULL, \
+                    current_lobby INT DEFAULT NULL, \
                     isAdmin INT NOT NULL DEFAULT 0, \
                     ip VARCHAR(32) NOT NULL DEFAULT 'None', \
                     first_connection DATETIME NOT NULL DEFAULT NOW(), \
